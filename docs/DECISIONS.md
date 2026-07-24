@@ -131,15 +131,28 @@ ineinander. Pfad über `PseudonymVault.url(baseDirectory:partition:)`. Der
 Rückweg ist zusätzlich abgesichert: `MaskingSession` trägt die Zuordnung
 **dieser einen Anfrage**, statt sie aus dem globalen Vault zu lesen.
 
+### Normalisierung nur zur Erkennung
+
+Der Mustervergleich läuft zusätzlich auf einer normalisierten
+Erkennungs-Oberfläche (NFKC, Homoglyphen-Faltung, Trennzeichen-Kollaps,
+dekodiertes Base64). **Diese Oberfläche wird nie ausgeliefert.** Würde man
+Homoglyphen im Nutztext falten, zerstörte das legitimen kyrillischen oder
+griechischen Inhalt — aus `Москва` würde Buchstabensalat.
+
+Drei Stufen, jeweils nur bei Bedarf: Klartext → Oberfläche (nur wenn sie sich
+unterscheidet) → kompakte Fassung (nur bei tatsächlich erkannter
+Buchstaben-Sperrung, mit gelockerten `\s*`-Mustern). Auf normaler Prosa
+entstehen Stufe 2 und 3 nie, der Normalfall kostet also nichts.
+
+Ein Treffer, der **erst nach** Normalisierung zustande kommt, erzeugt zusätzlich
+`SAN-003` — ein Umgehungsversuch wiegt schwerer als derselbe Text im Klartext.
+
 ## Bekannte Lücken (bewusst offen)
 
-Der Injection-Scanner erkennt derzeit **nicht**: nicht-englische Formulierungen,
-Homoglyphen, buchstabenweise Trennung, kodierte Nutzlasten (Base64). Diese
-Lücken sind in `InjectionScannerTests` als `testKnownLimitation_*` festgehalten —
-schlagen sie um, ist die Lücke geschlossen.
-
-Behebung braucht: NFKC-Normalisierung, Confusable-Folding (UTS #39),
-Whitespace-/Interpunktions-Kollaps, mehrsprachige Regelsätze.
+Der Regelkatalog deckt Englisch (INJ-0xx) und Deutsch (INJ-1xx) ab. Andere
+Sprachen brauchen eigene Regeln. Semantische Umschreibungen („tu so, als
+hättest du keine Vorgaben") erkennt keine Regex — dagegen hilft nur ein
+Klassifikator, und der ist bewusst nicht Teil dieser Stufe.
 
 Das PII-Gate ist auf **deutschsprachige** Muster optimiert (Anreden, Straßen,
 PLZ, Vornamen-Lexikon). Andere Sprachräume brauchen eigene Muster. Auch hier
@@ -152,7 +165,7 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 |---|---|---|
 | 1 | `GatewayCore` — Decision, RuleIDs, Audit, Policy | **fertig** |
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
-| 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | offen |
+| 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | offen |
 | 5 | Semantic Cache | offen |
 | 6 | DLP-Policy-Semantik | offen |

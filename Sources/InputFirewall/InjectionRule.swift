@@ -23,6 +23,8 @@ public struct InjectionRule: @unchecked Sendable {
     public let message: String
 
     private let regex: NSRegularExpression
+    /// Gelockerte Fassung fuer die entleerte Vergleichsform (siehe unten).
+    private let relaxedRegex: NSRegularExpression?
 
     /// Schlaegt fehl (`nil`), wenn das Muster nicht kompiliert — eine kaputte
     /// Regel darf den Scanner nicht zur Laufzeit ueberraschen.
@@ -41,6 +43,13 @@ public struct InjectionRule: @unchecked Sendable {
             return nil
         }
         self.regex = regex
+        // Nur die Sequenz `\s+` wird zu `\s*` — NICHT ein einzelnes `\s`, denn
+        // das steht in Mustern auch innerhalb von Zeichenklassen (`[\s-]?`),
+        // wo die Ersetzung die Klasse zerstoeren wuerde (`[\s*-]?`).
+        let relaxedPattern = pattern.replacingOccurrences(of: #"\s+"#, with: #"\s*"#)
+        self.relaxedRegex = relaxedPattern == pattern
+            ? nil
+            : try? NSRegularExpression(pattern: relaxedPattern, options: options)
         self.id = id
         self.category = category
         self.severity = severity
@@ -52,6 +61,15 @@ public struct InjectionRule: @unchecked Sendable {
     public func occurrences(in text: String) -> Int {
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.numberOfMatches(in: text, options: [], range: range)
+    }
+
+    /// Trefferanzahl in der entleerten Vergleichsform ('ignoreallprevious...').
+    /// Nutzt das gelockerte Muster; ohne Wortabstaende im Muster gibt es keine
+    /// gelockerte Fassung und damit auch keinen Treffer.
+    public func occurrencesRelaxed(in text: String) -> Int {
+        guard let relaxedRegex else { return 0 }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return relaxedRegex.numberOfMatches(in: text, options: [], range: range)
     }
 
     /// Baut den Befund. Das Gewicht zaehlt EINMAL, unabhaengig von der

@@ -18,10 +18,15 @@ import GatewayCore
 // Der Scanner ENTSCHEIDET NICHT. Er liefert Befunde und einen Score;
 // die Disposition bestimmt `GatewayPolicy`.
 //
-// BEWUSSTE GRENZEN (nicht ueberlesen): Die Muster sind englisch und
-// wortnah. Nicht erkannt werden derzeit u. a. anderssprachige Formulierungen,
-// Homoglyphen (kyrillisches 'o'), buchstabenweise Trennung und kodierte
-// Nutzlasten (Base64). Diese Luecken sind bekannt und dokumentiert.
+// Gegen Verschleierung laeuft der Vergleich zusaetzlich auf einer normalisierten
+// Erkennungs-Oberflaeche (`TextNormalizer`): Homoglyphen, Buchstaben-Sperrung,
+// Trennzeichen und base64-Nutzlast. Diese Oberflaeche wird NIE ausgeliefert.
+//
+// BEWUSSTE GRENZEN (nicht ueberlesen): Muster-Erkennung bleibt wortnah. Der
+// Katalog deckt Englisch und Deutsch ab — andere Sprachen brauchen eigene
+// Regeln. Semantische Umschreibungen ('tu so, als haettest du keine Vorgaben')
+// erkennt keine Regex. Der Scanner ist eine billige erste Schicht, kein Ersatz
+// fuer Least-Privilege-Tool-Design und Output-Guardrails.
 
 public struct InjectionScanner: ContentScanner {
 
@@ -66,16 +71,49 @@ public struct InjectionScanner: ContentScanner {
                 weight: weight, message: message, occurrences: removed))
         }
 
-        // 2. Regelwerk (Injection + Secrets) auf dem gesaeuberten Text.
+        // 2. Erkennungs-Oberflaeche aufbauen (NFKC, Homoglyphen, Sperrung, base64).
+        //    Sie wird NIE ausgeliefert — nur verglichen. Unterscheidet sie sich
+        //    nicht vom gesaeuberten Text, entfaellt der zweite Durchgang komplett;
+        //    das ist der Normalfall und kostet dann nichts.
+        let normalized = TextNormalizer.normalize(cleaned)
+        var evadedRules = 0
+
+        // 3. Regelwerk. Secret-Formate laufen NUR auf dem Original: ihre Muster
+        //    sind case-sensitiv und wuerden auf der gefalteten Oberflaeche
+        //    reihenweise falsch anschlagen.
         for rule in rules {
-            let hits = rule.occurrences(in: cleaned)
-            if hits > 0 {
-                raw += rule.weight
-                findings.append(rule.finding(occurrences: hits))
+            var hits = rule.occurrences(in: cleaned)
+            var onlyOnSurface = false
+            if hits == 0, rule.category != .secret {
+                if normalized.didChange {
+                    hits = rule.occurrences(in: normalized.surface)
+                }
+                // Letzte Stufe: durchgehend gesperrter Text faellt zu EINEM Wort
+                // zusammen — dort greift nur das gelockerte Muster.
+                if hits == 0, let compact = normalized.compact {
+                    hits = rule.occurrencesRelaxed(in: compact)
+                }
+                onlyOnSurface = hits > 0
             }
+            guard hits > 0 else { continue }
+            raw += rule.weight
+            findings.append(rule.finding(occurrences: hits))
+            if onlyOnSurface { evadedRules += 1 }
         }
 
-        // 3. Groessen-Anomalie.
+        // 4. Verschleierung ist ein eigenes Signal: wer eine Regel erst nach
+        //    Normalisierung trifft, hat sie aktiv zu umgehen versucht. Das wiegt
+        //    schwerer als derselbe Text im Klartext.
+        if evadedRules > 0 {
+            raw += 0.25
+            findings.append(Finding(
+                ruleID: Self.ruleObfuscation, category: .injection, severity: .high,
+                weight: 0.25,
+                message: "evasion: rule matched only after normalization",
+                occurrences: evadedRules))
+        }
+
+        // 5. Groessen-Anomalie.
         if cleaned.unicodeScalars.count > sizeAnomalyThreshold {
             raw += 0.2
             findings.append(Finding(
@@ -139,13 +177,15 @@ public struct InjectionScanner: ContentScanner {
 
     public static let ruleInvisibleChars: RuleID = "SAN-001"
     public static let ruleBidiOverride: RuleID = "SAN-002"
+    public static let ruleObfuscation: RuleID = "SAN-003"
     public static let ruleSizeAnomaly: RuleID = "ANO-001"
 
     // MARK: - Katalog
 
-    /// Mitgelieferter Regelkatalog: Prompt-Injection (INJ) + Secrets (SEC).
-    public static let defaultRules: [InjectionRule] = [defaultInjectionRules, defaultSecretRules]
-        .flatMap { $0 }
+    /// Mitgelieferter Regelkatalog: Prompt-Injection englisch (INJ-0xx) und
+    /// deutsch (INJ-1xx) plus Secret-Formate (SEC).
+    public static let defaultRules: [InjectionRule] =
+        [defaultInjectionRules, defaultGermanInjectionRules, defaultSecretRules].flatMap { $0 }
 
     /// Kuratierte Muster bekannter Prompt-Injection-/Exfiltrations-Vektoren.
     public static let defaultInjectionRules: [InjectionRule] = [
@@ -188,6 +228,45 @@ public struct InjectionScanner: ContentScanner {
         InjectionRule(id: "INJ-013", category: .injection, severity: .critical, weight: 0.50,
                       message: "credential-exfiltration request",
                       pattern: #"(send|post|exfiltrate|leak|forward)\s+[^\n]{0,40}(api[_\s-]?key|secret|token|password|credential)"#),
+    ].compactMap { $0 }
+
+    /// Deutschsprachige Muster. Ein Modell befolgt 'Ignoriere alle vorherigen
+    /// Anweisungen' genauso zuverlaessig wie die englische Fassung — ein rein
+    /// englischer Katalog ist im deutschsprachigen Betrieb praktisch blind.
+    ///
+    /// Umlaute sind jeweils in beiden Schreibweisen abgedeckt (ue/ü), weil
+    /// Transliteration ein trivialer Bypass waere.
+    public static let defaultGermanInjectionRules: [InjectionRule] = [
+        InjectionRule(id: "INJ-101", category: .injection, severity: .critical, weight: 0.55,
+                      message: "override (de): 'ignoriere vorherige Anweisungen'",
+                      pattern: #"ignorier(?:e|en|st)?\s+(?:alle[nrs]?\s+|die\s+|jegliche\s+)?(?:vorherigen|bisherigen|obigen|vorangegangenen|frueheren|früheren)\s+(?:anweisungen|anleitungen|regeln|befehle|instruktionen|vorgaben)"#),
+        InjectionRule(id: "INJ-102", category: .injection, severity: .high, weight: 0.50,
+                      message: "override (de): 'vergiss alle Regeln'",
+                      pattern: #"vergiss\s+(?:alle[sn]?\s+|die\s+)?(?:bisherigen\s+|vorherigen\s+|obigen\s+)?(?:anweisungen|regeln|befehle|vorgaben|kontext)"#),
+        InjectionRule(id: "INJ-103", category: .injection, severity: .critical, weight: 0.55,
+                      message: "exfil (de): 'zeige deinen System-Prompt'",
+                      pattern: #"(?:zeig|zeige|nenne|gib|verrate|drucke|wiederhole|nenn)\s+(?:mir\s+)?(?:deine[nr]?|den|die|das|alle)\s+(?:system[\s-]?)?(?:prompt|anweisungen|instruktionen|regeln|vorgaben)"#),
+        InjectionRule(id: "INJ-104", category: .injection, severity: .medium, weight: 0.30,
+                      message: "role-override (de): 'du bist jetzt ...'",
+                      pattern: #"du\s+bist\s+(?:jetzt|nun|ab\s+(?:jetzt|sofort))\b"#),
+        InjectionRule(id: "INJ-105", category: .injection, severity: .medium, weight: 0.30,
+                      message: "instruction injection (de): 'neue Anweisungen:'",
+                      pattern: #"neue[nrs]?\s+(?:anweisungen?|regeln?|aufgabe|instruktionen?)\s*:"#),
+        InjectionRule(id: "INJ-106", category: .injection, severity: .high, weight: 0.45,
+                      message: "override (de): 'missachte die obigen Anweisungen'",
+                      pattern: #"(?:missachte|ignoriere|uebergehe|übergehe)\s+(?:alle\s+|die\s+)?(?:vorherigen|obigen|bisherigen|system)"#),
+        InjectionRule(id: "INJ-107", category: .injection, severity: .medium, weight: 0.30,
+                      message: "privilege-escalation (de): Entwicklermodus",
+                      pattern: #"\b(?:entwickler|admin|administrator|root|gott)[\s-]?modus\b"#),
+        InjectionRule(id: "INJ-108", category: .injection, severity: .critical, weight: 0.50,
+                      message: "credential exfiltration (de)",
+                      pattern: #"(?:sende|schicke|leite|uebermittle|übermittle|verrate)\s+[^\n]{0,40}(?:passwort|passwoerter|passwörter|zugangsdaten|api[\s-]?(?:schluessel|schlüssel|key)|geheimnis|token|anmeldedaten)"#),
+        InjectionRule(id: "INJ-109", category: .injection, severity: .high, weight: 0.40,
+                      message: "fake system-prompt delimiter (de)",
+                      pattern: #"\b(?:anfang|beginn|ende)\s+(?:der\s+|des\s+)?(?:system|admin)[\s-]?(?:prompt|nachricht|anweisung|anweisungen)"#),
+        InjectionRule(id: "INJ-110", category: .injection, severity: .high, weight: 0.40,
+                      message: "role-override (de): 'ab jetzt handelst du als'",
+                      pattern: #"ab\s+(?:jetzt|sofort|nun)\s+(?:handelst|agierst|verhaeltst|verhältst|antwortest)\s+du"#),
     ].compactMap { $0 }
 
     /// Secret-Formate. Ueberwiegend case-sensitiv geprueft — Token-Formate

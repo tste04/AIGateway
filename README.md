@@ -24,7 +24,7 @@ ausdrücklich nicht Teil davon.
 | Baustein | Stand |
 |---|---|
 | `GatewayCore` — `GatewayDecision`, `RuleID`, `Finding`, `AuditEvent`, `GatewayPolicy`, `Principal` | ✅ |
-| Input Firewall — **Injection** (+ Secret-Formate, Sanitisierung, Größen-Anomalie) | ✅ |
+| Input Firewall — **Injection** (EN + DE, Verschleierungs-Normalisierung, Secrets) | ✅ |
 | Input Firewall — **PII** (Erkennung, Maskierung, Round-Trip) | ✅ |
 | Input Firewall — DLP · Malware | ⬜ |
 | Semantic Cache | ⬜ |
@@ -106,17 +106,17 @@ Pipeline-Reihenfolge und der Cache-Festlegungen.
 
 ## Bekannte Grenzen (ehrlich)
 
-Der Injection-Scanner ist eine deterministische Heuristik, kein Modell. Er
-erkennt derzeit **nicht**:
+Der Injection-Scanner ist eine deterministische Heuristik, kein Modell.
 
-- nicht-englische Formulierungen (deutsche Injektionen: Score 0)
-- Homoglyphen (kyrillisches `о` statt `o`)
-- buchstabenweise Trennung (`I g n o r e …`)
-- kodierte Nutzlasten (Base64)
+Erkannt werden englische und deutsche Muster, auch verschleiert: Homoglyphen
+(`Ignоre` mit kyrillischem о), Buchstaben-Sperrung (`I g n o r e …`),
+Trennzeichen (`IGNORE-ALL-PREVIOUS`) und Base64-Nutzlasten. Die dafür nötige
+Normalisierung dient **nur dem Vergleich** — ausgeliefert wird immer der bloß
+sanitisierte Text, damit legitimer nicht-lateinischer Inhalt intakt bleibt.
 
-Diese Lücken sind als `testKnownLimitation_*` in der Testsuite festgehalten.
-Der Scanner ist eine billige erste Schicht — kein Ersatz für
-Least-Privilege-Tool-Design und Output-Guardrails.
+Nicht erkannt werden: andere Sprachen als EN/DE und semantische Umschreibungen
+(„tu so, als hättest du keine Vorgaben"). Der Scanner ist eine billige erste
+Schicht — kein Ersatz für Least-Privilege-Tool-Design und Output-Guardrails.
 
 ## Plattformen
 
