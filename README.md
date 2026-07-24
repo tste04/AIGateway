@@ -28,7 +28,7 @@ ausdrücklich nicht Teil davon.
 | Input Firewall — **PII** (Erkennung, Maskierung, Round-Trip) | ✅ |
 | Input Firewall — DLP · Malware | ⬜ |
 | Semantic Cache | ⬜ |
-| HTTP/SSE-Server, Provider-Adapter | ⬜ |
+| **HTTP/SSE-Server**, Provider-Adapter (OpenAI · Anthropic · Ollama) | ✅ |
 
 ## Benutzung
 
@@ -92,6 +92,34 @@ var policy = GatewayPolicy.standard
 policy.suppressedRules = ["INJ-008"]   // zählt nicht mehr zum Risiko,
                                        // bleibt aber im Audit sichtbar
 ```
+
+## Als Dienst betreiben
+
+```swift
+let pipeline = GatewayPipeline(
+    pii: PIIGate(policy: .gatewayDefault, baseDirectory: dataDir),
+    policy: .standard)
+
+let service = GatewayService(
+    configuration: GatewayConfiguration(
+        port: 8080,
+        upstream: .ollama,                                   // oder .openai / .anthropic
+        upstreamBaseURL: URL(string: "http://127.0.0.1:11434")!),
+    pipeline: pipeline,
+    onAudit: { event in auditLog.append(event) })
+
+try service.start()
+```
+
+Eingehend werden alle drei Dialekte bedient — `/v1/chat/completions`,
+`/v1/messages`, `/api/chat`. Der Client darf im OpenAI-Dialekt sprechen,
+während das Gateway nach Anthropic weiterreicht; die Antwort kommt im Dialekt
+der Frage zurück. Streaming (SSE und NDJSON) wird durchgereicht, inklusive
+De-Maskierung über Chunk-Grenzen hinweg.
+
+**TLS ist bewusst nicht enthalten.** Der Server bindet auf Loopback;
+Terminierung übernimmt ein Reverse Proxy davor. Selbstgeschriebene Krypto wäre
+das größte Risiko im Projekt.
 
 ## Entwurfsregeln
 

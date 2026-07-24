@@ -147,6 +147,35 @@ entstehen Stufe 2 und 3 nie, der Normalfall kostet also nichts.
 Ein Treffer, der **erst nach** Normalisierung zustande kommt, erzeugt zusätzlich
 `SAN-003` — ein Umgehungsversuch wiegt schwerer als derselbe Text im Klartext.
 
+### Rollen bestimmen die Provenienz
+
+Im Gateway wird nicht der ganze Prompt als ein Block bewertet, sondern jede
+Nachricht mit der Vertrauensstufe ihrer Rolle:
+
+| Rolle | Trust | Begründung |
+|---|---|---|
+| `system` | `trusted` | stammt aus der Anwendung selbst |
+| `user` / `assistant` | `neutral` | |
+| `tool` | `untrusted` | **der Hauptangriffsweg im Agent Loop** — ein Werkzeug liefert Fremdinhalt, der als Anweisung gelesen wird |
+
+Dieselbe Zeichenfolge wird dadurch in einer Systemnachricht durchgelassen und in
+einer Tool-Ausgabe geblockt. Das ist beabsichtigt.
+
+### De-Maskierung im Datenstrom
+
+Ein Platzhalter kann über SSE-Chunks zerfallen (`"...[Pers"` / `"on-1]..."`).
+Wer jeden Chunk einzeln übersetzt, findet ihn in keinem von beiden — er
+erreicht den Nutzer unübersetzt. `StreamRewriter` hält deshalb genau so viel
+Text zurück, wie der **Anfang eines bekannten Platzhalters** sein könnte
+(Präfix-Prüfung gegen die Zuordnung dieser Anfrage). Auf normalem Text wird
+nichts zurückgehalten — die Latenz-Kosten entstehen nur an einer
+Platzhalter-Grenze.
+
+### Kein Keep-Alive, kein chunked Request-Body
+
+Eine Anfrage je Verbindung. Spart den halben Zustandsautomaten; der Durchsatz
+eines Gateways hängt am Modell, nicht am Socket.
+
 ## Bekannte Lücken (bewusst offen)
 
 Der Regelkatalog deckt Englisch (INJ-0xx) und Deutsch (INJ-1xx) ab. Andere
@@ -166,7 +195,7 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 1 | `GatewayCore` — Decision, RuleIDs, Audit, Policy | **fertig** |
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
-| 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | offen |
+| 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
 | 5 | Semantic Cache | offen |
 | 6 | DLP-Policy-Semantik | offen |
 | 7 | Malware (ClamAV-Naht) | offen |
