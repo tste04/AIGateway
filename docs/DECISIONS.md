@@ -110,6 +110,27 @@ eine Klammer um die Pipeline, kein Durchgangsknoten.
    Schwelle. Nicht cachebar: Tool-Calling-Turns, hohe Temperatur,
    zeitabhängige Fragen.
 
+### PII-Befunde blockieren nicht
+
+Ein erkanntes Personendatum ist **kein Verstoß** — es wird behoben, indem
+maskiert wird. PII-Findings tragen deshalb Gewicht 0: sie stehen im Audit,
+lösen aber `.allowModified` aus statt `.block`. Würden sie blocken, wäre jeder
+realistische Prompt abgelehnt. Einzige Ausnahme: der Dichte-Wächter mit
+`onDensityExceeded: "abstain"` — dort ist das Blocken der ausdrückliche Wunsch.
+
+### Provenienz gewichtet PII nicht
+
+Der Trust-Multiplikator bleibt bei 1.0. Eine IBAN ist in einer eigenen Notiz
+genauso schutzbedürftig wie in fremder Post — anders als bei Injection, wo die
+Herkunft die Gefährlichkeit bestimmt.
+
+### Ein Vault je Partition
+
+Zwei Mandanten dürfen sich keinen Vault teilen, sonst laufen ihre Token-Räume
+ineinander. Pfad über `PseudonymVault.url(baseDirectory:partition:)`. Der
+Rückweg ist zusätzlich abgesichert: `MaskingSession` trägt die Zuordnung
+**dieser einen Anfrage**, statt sie aus dem globalen Vault zu lesen.
+
 ## Bekannte Lücken (bewusst offen)
 
 Der Injection-Scanner erkennt derzeit **nicht**: nicht-englische Formulierungen,
@@ -120,12 +141,17 @@ schlagen sie um, ist die Lücke geschlossen.
 Behebung braucht: NFKC-Normalisierung, Confusable-Folding (UTS #39),
 Whitespace-/Interpunktions-Kollaps, mehrsprachige Regelsätze.
 
+Das PII-Gate ist auf **deutschsprachige** Muster optimiert (Anreden, Straßen,
+PLZ, Vornamen-Lexikon). Andere Sprachräume brauchen eigene Muster. Auch hier
+gilt: deterministische Heuristik, keine Vollständigkeitsgarantie —
+Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
+
 ## Umsetzungsreihenfolge
 
 | Rang | Paket | Stand |
 |---|---|---|
 | 1 | `GatewayCore` — Decision, RuleIDs, Audit, Policy | **fertig** |
-| 2 | PII-Gate + Round-Trip-Maskierung | offen |
+| 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | offen |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | offen |
 | 5 | Semantic Cache | offen |

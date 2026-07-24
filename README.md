@@ -25,7 +25,8 @@ ausdrücklich nicht Teil davon.
 |---|---|
 | `GatewayCore` — `GatewayDecision`, `RuleID`, `Finding`, `AuditEvent`, `GatewayPolicy`, `Principal` | ✅ |
 | Input Firewall — **Injection** (+ Secret-Formate, Sanitisierung, Größen-Anomalie) | ✅ |
-| Input Firewall — PII · DLP · Malware | ⬜ |
+| Input Firewall — **PII** (Erkennung, Maskierung, Round-Trip) | ✅ |
+| Input Firewall — DLP · Malware | ⬜ |
 | Semantic Cache | ⬜ |
 | HTTP/SSE-Server, Provider-Adapter | ⬜ |
 
@@ -55,6 +56,24 @@ let decision = GatewayDecision(
     findings: result.findings, content: result.content)
 let event = AuditEvent(decision: decision, principal: principal)
 ```
+
+### PII maskieren und zurückübersetzen
+
+Das Gateway ist eine Klammer: maskieren auf dem Hinweg, Klardaten zurück auf
+dem Rückweg. Der Provider sieht nur Platzhalter.
+
+```swift
+let gate = PIIGate(policy: .gatewayDefault, baseDirectory: dataDir,
+                   partition: principal.cachePartition)   // ein Vault je Partition
+
+let out = await gate.mask(prompt, sparingQuery: userQuestion)
+// out.maskedContent  -> "Bitte an Frau [Person-1] senden, IBAN [IBAN-1]."
+let answer = await callModel(out.maskedContent)
+let final  = out.session.unmask(answer)                   // Klardaten zurück
+```
+
+Ein PII-Treffer blockiert nicht — er wird behoben. Die Befunde erscheinen im
+Audit (`PII-001` …), die Disposition ist `.allowModified`.
 
 ### Eigene Regeln
 

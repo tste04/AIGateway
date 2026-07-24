@@ -87,5 +87,9 @@ public struct ScanResult: Sendable, Codable, Equatable {
 public protocol ContentScanner: Sendable {
     /// Stabiler Name der Stufe, erscheint in `StageTiming`.
     var stageName: String { get }
-    func scan(_ content: String, trust: SourceTrust) -> ScanResult
+
+    /// `async`, weil spaetere Stufen es sein muessen (Vault-Actor, ClamAV-Socket).
+    /// Rein synchrone Scanner erfuellen die Anforderung unveraendert — Swift laesst
+    /// eine sync-Funktion eine async-Anforderung bezeugen.
+    func scan(_ content: String, trust: SourceTrust) async -> ScanResult
 }
