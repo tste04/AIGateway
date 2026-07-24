@@ -2,15 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "InjectionScanner",
+    name: "AIGateway",
+    platforms: [
+        .macOS(.v12),
+    ],
     products: [
-        .library(name: "InjectionScanner", targets: ["InjectionScanner"]),
+        .library(name: "GatewayCore", targets: ["GatewayCore"]),
+        .library(name: "InputFirewall", targets: ["InputFirewall"]),
     ],
     targets: [
-        .target(name: "InjectionScanner"),
-        .testTarget(
-            name: "InjectionScannerTests",
-            dependencies: ["InjectionScanner"]
-        ),
+        // Reine Typen und Vertraege. Keine Abhaengigkeiten, auch keine internen.
+        .target(name: "GatewayCore"),
+        // Firewall-Stufen. Heute: Injection. Folgend: PII, DLP, Malware.
+        .target(name: "InputFirewall", dependencies: ["GatewayCore"]),
+
+        .testTarget(name: "GatewayCoreTests", dependencies: ["GatewayCore"]),
+        .testTarget(name: "InputFirewallTests", dependencies: ["InputFirewall", "GatewayCore"]),
     ]
 )
