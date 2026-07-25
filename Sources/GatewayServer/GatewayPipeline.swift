@@ -136,11 +136,21 @@ public actor GatewayPipeline {
             // auf derselben Fassung laufen — sonst sucht die PII-Stufe Muster in
             // Zeichenfolgen, die so gar nicht mehr ausgeliefert werden, und ein
             // getarntes Zeichen mitten im Namen laesst sie danebengreifen.
-            let query = sanitized.lastUserMessage
+            //
+            // BEWUSST OHNE `sparingQuery`: `keepQueriedEntity` liesse Personen
+            // aus der Nutzerfrage im Klartext. Im Gateway ist die Frage aber
+            // Teil des maskierten Bestands — bei einer Ein-Nachrichten-Anfrage
+            // WAERE sie der gesamte Bestand, und die Personen-Maskierung liefe
+            // im haeufigsten Fall leer. In Mehr-Nachrichten-Anfragen staende
+            // derselbe Name zudem einmal klar (Frage) und einmal als Token
+            // (Kontext) im selben Prompt — der Provider koennte die Zuordnung
+            // einfach ablesen. Die Schonung bleibt ein Feature der Bibliothek
+            // (`PIIGate.mask(_:sparingQuery:)`), wo Frage und Bestand getrennte
+            // Dinge sind.
             var masked: [ChatMessage] = []
             var piiRisk = 0.0
             for message in sanitized.messages {
-                let outcome = await pii.mask(message.content, sparingQuery: query)
+                let outcome = await pii.mask(message.content)
                 findings += outcome.scan.findings
                 piiRisk = max(piiRisk, policy.disposition(for: outcome.scan).1)
                 wasModified = wasModified || outcome.scan.wasModified

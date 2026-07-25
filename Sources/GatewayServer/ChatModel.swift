@@ -48,8 +48,9 @@ public struct ChatRequest: Sendable, Codable, Equatable {
         messages.map(\.content).joined(separator: "\n")
     }
 
-    /// Die letzte Nutzerfrage. Grundlage fuer `keepQueriedEntity`: wer darin
-    /// steht, muss nicht maskiert werden.
+    /// Die letzte Nutzerfrage. Fuer Bibliotheks-Aufrufer, die `PIIGate` mit
+    /// `sparingQuery` betreiben (Frage und Bestand getrennt). Die Pipeline
+    /// selbst maskiert OHNE Schonung — siehe Begruendung in `GatewayPipeline`.
     public var lastUserMessage: String? {
         messages.last { $0.role == .user }?.content
     }

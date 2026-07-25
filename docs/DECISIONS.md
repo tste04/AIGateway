@@ -134,6 +134,19 @@ lösen aber `.allowModified` aus statt `.block`. Würden sie blocken, wäre jede
 realistische Prompt abgelehnt. Einzige Ausnahme: der Dichte-Wächter mit
 `onDensityExceeded: "abstain"` — dort ist das Blocken der ausdrückliche Wunsch.
 
+### Keine Query-Schonung im Gateway-Pfad (Juli 2026)
+
+`keepQueriedEntity` (Personen aus der Nutzerfrage bleiben Klartext) ist ein
+Feature der **Bibliothek**, nicht der Pipeline. Im Gateway ist die Frage Teil
+des maskierten Bestands: bei einer Ein-Nachrichten-Anfrage wäre sie der
+gesamte Bestand — die Personen-Maskierung liefe im häufigsten Fall leer. In
+Mehr-Nachrichten-Anfragen stünde derselbe Name einmal klar (Frage) und einmal
+als Token (Kontext) im selben Prompt; der Provider könnte die Zuordnung
+ablesen, und die Pseudonymisierung wäre nur noch Dekoration. Die Pipeline
+maskiert deshalb ohne `sparingQuery`. Wer die Schonung will (Frage und Bestand
+getrennt, Qualität vor Maskierungstiefe), ruft `PIIGate.mask(_:sparingQuery:)`
+direkt.
+
 ### Provenienz gewichtet PII nicht
 
 Der Trust-Multiplikator bleibt bei 1.0. Eine IBAN ist in einer eigenen Notiz
