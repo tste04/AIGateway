@@ -143,6 +143,7 @@ public final class HTTPConnection: HTTPResponder, @unchecked Sendable {
         case 413: return "Payload Too Large"
         case 422: return "Unprocessable Entity"
         case 502: return "Bad Gateway"
+        case 503: return "Service Unavailable"
         default: return "Error"
         }
     }
@@ -155,15 +156,29 @@ public final class HTTPServer: @unchecked Sendable {
     private let port: UInt16
     private let loopbackOnly: Bool
     private let maxBodyBytes: Int
+    /// Lese-Timeout je Socket. Ohne ihn haelt ein Client, der den Rumpf nie
+    /// zu Ende sendet, seinen Verbindungs-Thread unbegrenzt (Slow-Body).
+    private let readTimeoutSeconds: Int
+    /// Deckel fuer gleichzeitige Verbindungen. Thread-per-Connection ohne
+    /// Limit hiesse: N langsame Clients binden N Threads. Ueber dem Deckel
+    /// wird sofort mit 503 abgewiesen, statt einen Thread zu starten.
+    private let maxConcurrentConnections: Int
     private let handler: Handler
     private var listenFD: Int32 = -1
     private var running = false
+    private var activeConnections = 0
+    private let stateLock = NSLock()
 
     public init(port: UInt16, loopbackOnly: Bool = true,
-                maxBodyBytes: Int = 1_000_000, handler: @escaping Handler) {
+                maxBodyBytes: Int = 1_000_000,
+                readTimeoutSeconds: Int = 30,
+                maxConcurrentConnections: Int = 64,
+                handler: @escaping Handler) {
         self.port = port
         self.loopbackOnly = loopbackOnly
         self.maxBodyBytes = maxBodyBytes
+        self.readTimeoutSeconds = readTimeoutSeconds
+        self.maxConcurrentConnections = maxConcurrentConnections
         self.handler = handler
     }
 
@@ -230,11 +245,40 @@ public final class HTTPServer: @unchecked Sendable {
             guard client >= 0 else {
                 if running { continue } else { return }
             }
-            Thread.detachNewThread { [weak self] in self?.serve(client) }
+
+            stateLock.lock()
+            let overloaded = activeConnections >= maxConcurrentConnections
+            if !overloaded { activeConnections += 1 }
+            stateLock.unlock()
+
+            if overloaded {
+                // Abweisen kostet einen kurzen blockierenden Write im
+                // Accept-Thread — deutlich billiger als der Thread, den die
+                // Annahme kosten wuerde.
+                let rejected = HTTPConnection(fd: client)
+                rejected.respond(status: 503, json: ["error": "server overloaded"])
+                rejected.finish()
+                continue
+            }
+
+            Thread.detachNewThread { [weak self] in
+                self?.serve(client)
+                guard let self else { return }
+                self.stateLock.lock()
+                self.activeConnections -= 1
+                self.stateLock.unlock()
+            }
         }
     }
 
     private func serve(_ fd: Int32) {
+        // Lese-Timeout auf Socket-Ebene: `read` kehrt dann mit Fehler zurueck
+        // statt endlos zu blockieren. Die Header-Obergrenze in `readRequest`
+        // begrenzt die Menge, dieses Timeout begrenzt die Dauer.
+        var timeout = timeval(tv_sec: time_t(readTimeoutSeconds), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+
         let connection = HTTPConnection(fd: fd)
         defer { connection.finish() }
 
@@ -242,7 +286,12 @@ public final class HTTPServer: @unchecked Sendable {
             connection.respond(status: 400, json: ["error": "malformed request"])
             return
         }
-        if request.body.count > maxBodyBytes {
+        // Gegen die ANGEKUENDIGTE Groesse pruefen, nicht nur gegen das bereits
+        // Gelesene: `readRequest` bricht bei zu grossem Content-Length frueh ab
+        // und liefert einen Teil-Rumpf — der laege unter der Grenze, und die
+        // Antwort waere faelschlich 400 (Parse-Fehler) statt 413.
+        let declaredBytes = Int(request.header("content-length") ?? "0") ?? 0
+        if request.body.count > maxBodyBytes || declaredBytes > maxBodyBytes {
             connection.respond(status: 413, json: ["error": "payload too large"])
             return
         }

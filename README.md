@@ -163,6 +163,12 @@ Entwurfsregeln, die den Sicherheitseigenschaften zugrunde liegen:
 Terminierung übernimmt ein Reverse Proxy davor. Selbstgeschriebene Krypto ist ein
 Risiko, das dieses Projekt nicht eingeht.
 
+**Der Reverse Proxy ist Teil des Sicherheitsmodells.** Das Gateway begrenzt
+sich selbst (Verbindungs-Deckel mit 503, Lese-Timeout, Größen-Grenzen); gegen
+gezielte volumetrische Angriffe und für Rate-Limiting je Client ist der Proxy
+davor zuständig. Fehlerantworten nennen per Default keine Regel-IDs und kein
+Upstream-Detail — Korrelation läuft über die `correlation_id` im Audit-Log.
+
 Vollständige Begründungen in [`docs/DECISIONS.md`](docs/DECISIONS.md), inklusive
 der verbindlichen Pipeline-Reihenfolge.
 

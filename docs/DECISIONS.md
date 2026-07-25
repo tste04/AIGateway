@@ -192,6 +192,48 @@ Platzhalter-Grenze.
 Eine Anfrage je Verbindung. Spart den halben Zustandsautomaten; der Durchsatz
 eines Gateways hängt am Modell, nicht am Socket.
 
+### Betriebsgrenzen des Servers (Juli 2026)
+
+Der Server bleibt Thread-per-Connection — einfach, auditierbar, und der
+Durchsatz hängt ohnehin am Modell. Die Konsequenz wird aber begrenzt statt
+ignoriert:
+
+- **Verbindungs-Deckel** (`maxConcurrentConnections`, Default 64): über dem
+  Deckel wird sofort mit 503 abgewiesen, statt einen weiteren Thread zu
+  binden. N langsame Clients binden sonst N Threads.
+- **Lese-Timeout** (`readTimeoutSeconds`, Default 30 s, `SO_RCVTIMEO`): ein
+  Client, der den Rumpf nie zu Ende sendet, verliert die Verbindung, statt
+  einen Thread unbegrenzt zu halten. Die Header-Obergrenze (64 KiB) begrenzt
+  die Menge, das Timeout die Dauer.
+- **413 gegen die angekündigte Größe**: `Content-Length` über
+  `maxBodyBytes` wird als 413 abgewiesen — auch wenn der bereits gelesene
+  Teil-Rumpf unter der Grenze liegt.
+
+**Der Reverse Proxy davor ist Teil des Sicherheitsmodells**, nicht nur
+TLS-Terminierer. Von ihm wird erwartet: Rate-Limiting je Client, ggf.
+Auth-Durchsetzung, und Schutz gegen Verbindungs-Fluten jenseits des Deckels.
+Das Gateway verteidigt sich gegen versehentliche Überlast; gegen gezielte
+volumetrische Angriffe verteidigt es sich ausdrücklich nicht selbst.
+
+### Fehler im laufenden Strom
+
+Ein Upstream-Fehler nach `beginStream` ist als HTTP-Status nicht mehr
+ausdrückbar. Ein stummer Abbruch sieht für den Client wie eine vollständige
+Antwort aus — das ist das schlechteste Ergebnis, weil halbe Antworten als
+ganze verarbeitet werden. Deshalb: ein Fehler-Ereignis **im Dialekt des
+Clients** (`encodeStreamError`), danach Verbindungsende, und bewusst **kein
+Terminator** (`[DONE]`/`message_stop`) — der würde regulären Abschluss
+signalisieren.
+
+### Fehlerdetails sind eine Betriebsoption
+
+Die Standard-Fehlerantworten nennen **keine** Regel-IDs (403) und **kein**
+Upstream-Detail (502). Regel-IDs sind ein Tuning-Orakel — ein Angreifer
+erfährt regelgenau, was angeschlagen hat; der Upstream-Fehlerkörper ist
+fremder Inhalt, der nicht ungefragt zum Client durchgereicht wird. Beides ist
+über die `correlation_id` mit dem Audit-Log korrelierbar; `debugErrorDetails`
+schaltet die ausführliche Form für Entwicklung frei.
+
 ## Nähte zum Gesamtbild (Juli 2026)
 
 Das Zielbild ist mehr als diese Box: unterhalb folgen Policy Engine, Router,
