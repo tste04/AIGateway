@@ -33,9 +33,29 @@ public struct HTTPRequest: Sendable {
     }
 }
 
-/// Schreibseite einer Verbindung. Genau EINE der beiden Betriebsarten
-/// verwenden: entweder `respond`, oder `beginStream`/`writeChunk`/`endStream`.
-public final class HTTPConnection: @unchecked Sendable {
+/// Schreibseite einer Antwort. Genau EINE der beiden Betriebsarten verwenden:
+/// entweder `respond`, oder `beginStream`/`writeChunk`/`endStream`.
+///
+/// Als Naht geschnitten, damit `GatewayService` gegen eine Attrappe testbar
+/// ist — der Pfad Firewall -> Downstream -> De-Maskierung war sonst nur mit
+/// echten Sockets erreichbar und blieb deshalb ungetestet.
+public protocol HTTPResponder: AnyObject, Sendable {
+    func respond(status: Int, contentType: String, body: Data, extraHeaders: [String: String])
+    func beginStream(contentType: String)
+    @discardableResult func writeChunk(_ text: String) -> Bool
+    func endStream()
+}
+
+public extension HTTPResponder {
+    func respond(status: Int, json object: [String: Any]) {
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+            ?? Data(#"{"error":"encoding failed"}"#.utf8)
+        respond(status: status, contentType: "application/json", body: data, extraHeaders: [:])
+    }
+}
+
+/// Die Socket-Implementierung der Schreibseite.
+public final class HTTPConnection: HTTPResponder, @unchecked Sendable {
 
     private let fd: Int32
     private var streaming = false
@@ -56,12 +76,6 @@ public final class HTTPConnection: @unchecked Sendable {
         _ = Self.writeAll(fd, Data(head.utf8))
         _ = Self.writeAll(fd, body)
         closed = true
-    }
-
-    public func respond(status: Int, json object: [String: Any]) {
-        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
-            ?? Data(#"{"error":"encoding failed"}"#.utf8)
-        respond(status: status, body: data)
     }
 
     /// Beginnt einen Antwortstrom. Ohne `Content-Length` — das Ende ist der

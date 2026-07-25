@@ -93,7 +93,10 @@ public final class GatewayService: @unchecked Sendable {
 
     // MARK: - Bearbeitung
 
-    private func handle(_ request: HTTPRequest, _ connection: HTTPConnection) async {
+    // `internal` statt `private`: die Integrationstests fahren den kompletten
+    // Pfad Firewall -> Downstream -> De-Maskierung ueber diese Methode, mit
+    // einem aufzeichnenden `HTTPResponder` statt eines Sockets.
+    func handle(_ request: HTTPRequest, _ connection: any HTTPResponder) async {
         if request.path == "/healthz" {
             return connection.respond(status: 200, json: ["status": "ok"])
         }
@@ -168,7 +171,7 @@ public final class GatewayService: @unchecked Sendable {
 
     private func relayOnce(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
                            session: MaskingSession,
-                           connection: HTTPConnection) async throws -> RelayFacts {
+                           connection: any HTTPResponder) async throws -> RelayFacts {
         var response = try await downstream.send(handoff)
         // Rueckweg: Klardaten wieder einsetzen.
         response.content = session.unmask(response.content)
@@ -180,7 +183,7 @@ public final class GatewayService: @unchecked Sendable {
 
     private func relayStream(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
                              session: MaskingSession,
-                             connection: HTTPConnection) async throws -> RelayFacts {
+                             connection: any HTTPResponder) async throws -> RelayFacts {
         let model = handoff.request.model
 
         connection.beginStream(contentType: inbound.framing == .serverSentEvents
