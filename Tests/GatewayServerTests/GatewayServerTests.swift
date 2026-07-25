@@ -172,6 +172,62 @@ final class ProviderAdapterTests: XCTestCase {
     }
 }
 
+// MARK: - Token-Verbrauch aus dem Strom
+
+final class StreamUsageTests: XCTestCase {
+
+    func testOpenAIReadsUsageFromFinalChunk() {
+        let adapter = OpenAIAdapter()
+        let payload = #"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}"#
+        XCTAssertEqual(adapter.streamUsage(fromEventPayload: payload),
+                       TokenUsage(promptTokens: 12, completionTokens: 34))
+    }
+
+    func testOpenAIIgnoresPlainDeltaAndTerminator() {
+        let adapter = OpenAIAdapter()
+        XCTAssertNil(adapter.streamUsage(
+            fromEventPayload: #"{"choices":[{"delta":{"content":"Hallo"}}]}"#))
+        XCTAssertNil(adapter.streamUsage(fromEventPayload: "[DONE]"))
+    }
+
+    func testAnthropicMergesUsageFromTwoEvents() {
+        // Eingabe im Kopf-Ereignis, Ausgabe erst im Abschluss — beides Teile.
+        let adapter = AnthropicAdapter()
+        let start = adapter.streamUsage(
+            fromEventPayload: #"{"type":"message_start","message":{"usage":{"input_tokens":40}}}"#)
+        let delta = adapter.streamUsage(
+            fromEventPayload: #"{"type":"message_delta","usage":{"output_tokens":7}}"#)
+
+        XCTAssertEqual(start, TokenUsage(promptTokens: 40, completionTokens: 0))
+        XCTAssertEqual(delta, TokenUsage(promptTokens: 0, completionTokens: 7))
+        XCTAssertEqual(start?.merging(delta!), TokenUsage(promptTokens: 40, completionTokens: 7))
+    }
+
+    func testAnthropicIgnoresTextEvents() {
+        let adapter = AnthropicAdapter()
+        XCTAssertNil(adapter.streamUsage(
+            fromEventPayload: #"{"type":"content_block_delta","delta":{"text":"Hallo"}}"#))
+    }
+
+    func testOllamaReadsUsageFromDoneObject() {
+        let adapter = OllamaAdapter()
+        let payload = #"{"done":true,"prompt_eval_count":5,"eval_count":9}"#
+        XCTAssertEqual(adapter.streamUsage(fromEventPayload: payload),
+                       TokenUsage(promptTokens: 5, completionTokens: 9))
+        // Laufende Chunks melden nichts.
+        XCTAssertNil(adapter.streamUsage(
+            fromEventPayload: #"{"done":false,"message":{"content":"Hi"}}"#))
+    }
+
+    func testMergingKeepsTheLargerCountPerField() {
+        // Monotone Zaehler: die Reihenfolge der Teilmeldungen darf egal sein.
+        let a = TokenUsage(promptTokens: 40, completionTokens: 0)
+        let b = TokenUsage(promptTokens: 0, completionTokens: 7)
+        XCTAssertEqual(a.merging(b), b.merging(a))
+        XCTAssertEqual(a.merging(b).totalTokens, 47)
+    }
+}
+
 // MARK: - Pipeline
 
 final class GatewayPipelineTests: XCTestCase {
@@ -343,6 +399,28 @@ final class GatewayPipelineTests: XCTestCase {
         let outcome = await pipeline.process(request, principal: .anonymous)
         XCTAssertEqual(outcome.decision.disposition, .allow)
         XCTAssertEqual(outcome.forward, request)
+    }
+
+    func testAuditCarriesRequestedModel() async {
+        let pipeline = GatewayPipeline(policy: lenient())
+        let outcome = await pipeline.process(
+            ChatRequest(model: "llama3", messages: [ChatMessage(role: .user, content: "hallo")]),
+            principal: .anonymous)
+        XCTAssertEqual(outcome.audit.model, "llama3")
+    }
+
+    func testBlockedAuditAlsoCarriesModel() async {
+        // Gerade bei `.block` ist interessant, worauf gezielt wurde.
+        var policy = GatewayPolicy.standard
+        policy.maxInputBytes = 10
+        let pipeline = GatewayPipeline(policy: policy)
+        let outcome = await pipeline.process(
+            ChatRequest(model: "gpt-4o", messages: [
+                ChatMessage(role: .user, content: String(repeating: "x", count: 100)),
+            ]),
+            principal: .anonymous)
+        XCTAssertEqual(outcome.decision.disposition, .block)
+        XCTAssertEqual(outcome.audit.model, "gpt-4o")
     }
 
     func testTimingsAreRecordedPerStage() async {

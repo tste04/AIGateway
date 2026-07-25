@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import Dispatch
 import GatewayCore
 import InputFirewall
 
@@ -40,6 +41,7 @@ public final class GatewayService: @unchecked Sendable {
     private let pipeline: GatewayPipeline
     private let downstream: Downstream
     private let onAudit: (@Sendable (AuditEvent) -> Void)?
+    private let onCompletion: (@Sendable (CompletionEvent) -> Void)?
     private var server: HTTPServer?
 
     /// Betriebsart „Proxy": das Ziel ist der in der Konfiguration genannte
@@ -47,7 +49,8 @@ public final class GatewayService: @unchecked Sendable {
     public convenience init(configuration: GatewayConfiguration,
                            pipeline: GatewayPipeline,
                            client: UpstreamClient = UpstreamClient(),
-                           onAudit: (@Sendable (AuditEvent) -> Void)? = nil) {
+                           onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
+                           onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.init(configuration: configuration,
                   pipeline: pipeline,
                   downstream: ProviderDownstream(
@@ -55,7 +58,8 @@ public final class GatewayService: @unchecked Sendable {
                     baseURL: configuration.upstreamBaseURL,
                     apiKey: configuration.apiKey,
                     client: client),
-                  onAudit: onAudit)
+                  onAudit: onAudit,
+                  onCompletion: onCompletion)
     }
 
     /// Betriebsart „Stufe": das Ziel wird gesetzt. `configuration.upstream` und
@@ -63,11 +67,13 @@ public final class GatewayService: @unchecked Sendable {
     public init(configuration: GatewayConfiguration,
                 pipeline: GatewayPipeline,
                 downstream: Downstream,
-                onAudit: (@Sendable (AuditEvent) -> Void)? = nil) {
+                onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
+                onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.configuration = configuration
         self.pipeline = pipeline
         self.downstream = downstream
         self.onAudit = onAudit
+        self.onCompletion = onCompletion
     }
 
     public func start() throws {
@@ -131,31 +137,50 @@ public final class GatewayService: @unchecked Sendable {
             riskScore: outcome.decision.riskScore,
             findings: outcome.decision.findings)
 
+        // Der Weg nach oben wird gemessen — nur er, nicht die Firewall davor.
+        // Deren Zeiten stehen als `StageTiming` im Audit-Eintrag.
+        let upstreamStart = DispatchTime.now().uptimeNanoseconds
         do {
+            let facts: RelayFacts
             if forward.stream {
-                try await relayStream(handoff, inbound: inbound,
-                                      session: outcome.session, connection: connection)
+                facts = try await relayStream(handoff, inbound: inbound,
+                                              session: outcome.session, connection: connection)
             } else {
-                try await relayOnce(handoff, inbound: inbound,
-                                    session: outcome.session, connection: connection)
+                facts = try await relayOnce(handoff, inbound: inbound,
+                                            session: outcome.session, connection: connection)
             }
+            emitCompletion(handoff, model: facts.model, usage: facts.usage,
+                           since: upstreamStart, streamed: forward.stream, status: 200)
         } catch {
             connection.respond(status: 502, json: ["error": "upstream failure", "detail": "\(error)"])
+            // Auch der Fehlschlag ist eine Kostenzeile: er hat Zeit gekostet und
+            // je nach Abbruchzeitpunkt beim Provider auch Tokens.
+            emitCompletion(handoff, model: forward.model, usage: nil,
+                           since: upstreamStart, streamed: forward.stream, status: 502)
         }
+    }
+
+    /// Was der Rueckweg ueber sich selbst weiss.
+    private struct RelayFacts {
+        let model: String
+        let usage: TokenUsage?
     }
 
     private func relayOnce(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
                            session: MaskingSession,
-                           connection: HTTPConnection) async throws {
+                           connection: HTTPConnection) async throws -> RelayFacts {
         var response = try await downstream.send(handoff)
         // Rueckweg: Klardaten wieder einsetzen.
         response.content = session.unmask(response.content)
         connection.respond(status: 200, body: try inbound.encodeResponse(response))
+        // Meldet der Provider kein Modell zurueck, gilt das angefragte.
+        return RelayFacts(model: response.model.isEmpty ? handoff.request.model : response.model,
+                          usage: response.usage)
     }
 
     private func relayStream(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
                              session: MaskingSession,
-                             connection: HTTPConnection) async throws {
+                             connection: HTTPConnection) async throws -> RelayFacts {
         let model = handoff.request.model
 
         connection.beginStream(contentType: inbound.framing == .serverSentEvents
@@ -165,7 +190,7 @@ public final class GatewayService: @unchecked Sendable {
         // einem Hintergrund-Thread, deshalb gekapselt und gesperrt.
         let state = RewriteState(session: session)
 
-        try await downstream.stream(handoff) { delta in
+        let usage = try await downstream.stream(handoff) { delta in
             let text = state.push(delta)
             guard !text.isEmpty else { return }
             connection.writeChunk(Self.frame(inbound.encodeStreamDelta(text, model: model),
@@ -182,6 +207,23 @@ public final class GatewayService: @unchecked Sendable {
             connection.writeChunk(Self.frame(terminator, as: inbound.framing))
         }
         connection.endStream()
+        return RelayFacts(model: model, usage: usage)
+    }
+
+    // MARK: - Abschluss melden
+
+    private func emitCompletion(_ handoff: GatewayHandoff, model: String,
+                                usage: TokenUsage?, since start: UInt64,
+                                streamed: Bool, status: Int) {
+        guard let onCompletion else { return }
+        onCompletion(CompletionEvent(
+            correlationID: handoff.correlationID,
+            principal: handoff.principal,
+            model: model,
+            usage: usage,
+            upstreamMilliseconds: Double(DispatchTime.now().uptimeNanoseconds &- start) / 1_000_000,
+            streamed: streamed,
+            status: status))
     }
 
     private static func frame(_ payload: String, as framing: StreamFraming) -> String {

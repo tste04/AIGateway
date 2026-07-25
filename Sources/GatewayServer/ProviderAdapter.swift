@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import GatewayCore
 
 // MARK: - Provider-Naht
 //
@@ -48,6 +49,20 @@ public protocol ProviderAdapter: Sendable {
     func encodeStreamDelta(_ text: String, model: String) -> String
     /// Abschluss-Nutzlast des ausgehenden Stroms, falls der Dialekt eine kennt.
     func streamTerminator(model: String) -> String?
+
+    /// Zieht gemeldeten Token-Verbrauch aus einer Ereignis-Nutzlast.
+    ///
+    /// Getrennt von `streamDelta`, weil beides in verschiedenen Ereignissen
+    /// steht: Text kommt laufend, der Verbrauch erst am Ende — bei Anthropic
+    /// sogar auf zwei Ereignisse verteilt. Teilmeldungen sind erlaubt, der
+    /// Aufrufer vereinigt sie ueber `TokenUsage.merging`.
+    func streamUsage(fromEventPayload payload: String) -> TokenUsage?
+}
+
+public extension ProviderAdapter {
+    /// Nicht jeder Dialekt meldet Verbrauch im Strom. Wer nichts meldet,
+    /// liefert `nil` — geschaetzt wird nie.
+    func streamUsage(fromEventPayload payload: String) -> TokenUsage? { nil }
 }
 
 // MARK: - Hilfen
@@ -188,6 +203,16 @@ public struct OpenAIAdapter: ProviderAdapter {
     }
 
     public func streamTerminator(model: String) -> String? { "[DONE]" }
+
+    /// OpenAI haengt den Verbrauch an den letzten Chunk (nur mit
+    /// `stream_options.include_usage`); dessen `choices` sind dann leer.
+    public func streamUsage(fromEventPayload payload: String) -> TokenUsage? {
+        guard payload != "[DONE]", let data = payload.data(using: .utf8),
+              let dict = try? JSONHelper.object(data),
+              let usage = dict["usage"] as? [String: Any] else { return nil }
+        return TokenUsage(promptTokens: usage["prompt_tokens"] as? Int ?? 0,
+                          completionTokens: usage["completion_tokens"] as? Int ?? 0)
+    }
 }
 
 // MARK: - Anthropic
@@ -297,6 +322,26 @@ public struct AnthropicAdapter: ProviderAdapter {
     public func streamTerminator(model: String) -> String? {
         JSONHelper.compactJSONLine(["type": "message_stop"])
     }
+
+    /// Anthropic meldet den Verbrauch auf ZWEI Ereignisse verteilt: die Eingabe
+    /// im `message_start`, die Ausgabe im abschliessenden `message_delta`.
+    /// Beides sind Teilmeldungen — der Aufrufer vereinigt sie.
+    public func streamUsage(fromEventPayload payload: String) -> TokenUsage? {
+        guard let data = payload.data(using: .utf8),
+              let dict = try? JSONHelper.object(data) else { return nil }
+        let reported: [String: Any]?
+        switch dict["type"] as? String {
+        case "message_start":
+            reported = (dict["message"] as? [String: Any])?["usage"] as? [String: Any]
+        case "message_delta":
+            reported = dict["usage"] as? [String: Any]
+        default:
+            reported = nil
+        }
+        guard let usage = reported else { return nil }
+        return TokenUsage(promptTokens: usage["input_tokens"] as? Int ?? 0,
+                          completionTokens: usage["output_tokens"] as? Int ?? 0)
+    }
 }
 
 // MARK: - Ollama
@@ -394,6 +439,17 @@ public struct OllamaAdapter: ProviderAdapter {
 
     public func streamTerminator(model: String) -> String? {
         JSONHelper.compactJSONLine(["model": model, "done": true])
+    }
+
+    /// Ollama meldet den Verbrauch im abschliessenden Objekt (`done: true`).
+    public func streamUsage(fromEventPayload payload: String) -> TokenUsage? {
+        guard let data = payload.data(using: .utf8),
+              let dict = try? JSONHelper.object(data),
+              dict["done"] as? Bool == true else { return nil }
+        let prompt = dict["prompt_eval_count"] as? Int
+        let completion = dict["eval_count"] as? Int
+        guard prompt != nil || completion != nil else { return nil }
+        return TokenUsage(promptTokens: prompt ?? 0, completionTokens: completion ?? 0)
     }
 }
 

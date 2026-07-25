@@ -76,7 +76,7 @@ public actor GatewayPipeline {
             let finding = Finding(
                 ruleID: Self.ruleOversizedInput, category: .anomaly, severity: .high, weight: 1.0,
                 message: "request exceeds maxInputBytes (\(payloadBytes) > \(policy.maxInputBytes))")
-            return blocked(correlationID: correlationID, principal: principal,
+            return blocked(correlationID: correlationID, principal: principal, model: request.model,
                            findings: [finding], risk: 1.0,
                            content: "", timings: [], bytes: payloadBytes)
         }
@@ -103,13 +103,13 @@ public actor GatewayPipeline {
         // Bei `.block` wandert das ORIGINAL in die Entscheidung — die Quarantaene
         // soll den Angriff so sehen, wie er ankam, nicht bereinigt.
         if worstRisk >= policy.blockThreshold {
-            return blocked(correlationID: correlationID, principal: principal,
+            return blocked(correlationID: correlationID, principal: principal, model: request.model,
                            findings: findings, risk: worstRisk,
                            content: request.scannableText, timings: timings, bytes: payloadBytes)
         }
         if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
             findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-            return blocked(correlationID: correlationID, principal: principal,
+            return blocked(correlationID: correlationID, principal: principal, model: request.model,
                            findings: findings, risk: 1.0,
                            content: request.scannableText, timings: timings, bytes: payloadBytes)
         }
@@ -144,14 +144,14 @@ public actor GatewayPipeline {
 
             if worstRisk >= policy.blockThreshold {
                 // Praktisch nur der Dichte-Waechter auf `abstain`.
-                return blocked(correlationID: correlationID, principal: principal,
+                return blocked(correlationID: correlationID, principal: principal, model: request.model,
                                findings: findings, risk: worstRisk,
                                content: request.scannableText, timings: timings,
                                bytes: payloadBytes)
             }
             if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
                 findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-                return blocked(correlationID: correlationID, principal: principal,
+                return blocked(correlationID: correlationID, principal: principal, model: request.model,
                                findings: findings, risk: 1.0,
                                content: request.scannableText, timings: timings,
                                bytes: payloadBytes)
@@ -168,7 +168,8 @@ public actor GatewayPipeline {
             findings: findings, content: forwarded.scannableText, timings: timings,
             degraded: Self.isDegraded(timings))
         return Outcome(decision: decision,
-                       audit: AuditEvent(decision: decision, principal: principal),
+                       audit: AuditEvent(decision: decision, principal: principal,
+                                         model: request.model),
                        forward: forwarded,
                        session: MaskingSession(mapping: mapping))
     }
@@ -182,7 +183,7 @@ public actor GatewayPipeline {
 
     // MARK: - Hilfen
 
-    private func blocked(correlationID: String, principal: Principal,
+    private func blocked(correlationID: String, principal: Principal, model: String,
                          findings: [Finding], risk: Double, content: String,
                          timings: [StageTiming], bytes: Int) -> Outcome {
         let decision = GatewayDecision(
@@ -190,7 +191,7 @@ public actor GatewayPipeline {
             findings: findings, content: content, timings: timings,
             degraded: Self.isDegraded(timings))
         return Outcome(decision: decision,
-                       audit: AuditEvent(decision: decision, principal: principal),
+                       audit: AuditEvent(decision: decision, principal: principal, model: model),
                        forward: nil,
                        session: .empty)
     }

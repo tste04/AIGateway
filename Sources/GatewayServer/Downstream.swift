@@ -47,8 +47,13 @@ public protocol Downstream: Sendable {
 
     /// Antwortstrom. `onDelta` bekommt Text-Zuwaechse, bereits aus der Rahmung
     /// des Ziels geloest — und wird aus einem Hintergrund-Thread aufgerufen.
+    ///
+    /// Liefert den gemeldeten Token-Verbrauch, sofern das Ziel einen meldet.
+    /// Bei der Einmal-Antwort steckt er in `ChatResponse.usage`; im Strom
+    /// kommt er verstreut und muss eingesammelt werden.
+    @discardableResult
     func stream(_ handoff: GatewayHandoff,
-                onDelta: @escaping @Sendable (String) -> Void) async throws
+                onDelta: @escaping @Sendable (String) -> Void) async throws -> TokenUsage?
 }
 
 // MARK: - Ziel: ein Modellanbieter
@@ -80,8 +85,9 @@ public struct ProviderDownstream: Downstream {
         return try dialect.decodeResponse(data)
     }
 
+    @discardableResult
     public func stream(_ handoff: GatewayHandoff,
-                       onDelta: @escaping @Sendable (String) -> Void) async throws {
+                       onDelta: @escaping @Sendable (String) -> Void) async throws -> TokenUsage? {
         var request = handoff.request
         request.stream = true
 
@@ -98,6 +104,7 @@ public struct ProviderDownstream: Downstream {
         ) { data in
             for text in events.consume(data, using: target) { onDelta(text) }
         }
+        return events.reportedUsage()
     }
 }
 
@@ -107,14 +114,31 @@ public struct ProviderDownstream: Downstream {
 private final class EventState: @unchecked Sendable {
 
     private var parser: EventStreamParser
+    private var usage: TokenUsage?
     private let lock = NSLock()
 
     init(framing: StreamFraming) {
         self.parser = EventStreamParser(framing: framing)
     }
 
+    /// Ein Ereignis kann Text tragen, Verbrauch, beides oder keines von beiden —
+    /// deshalb wird jede Nutzlast beiden Fragen vorgelegt.
     func consume(_ data: Data, using dialect: ProviderAdapter) -> [String] {
         lock.lock(); defer { lock.unlock() }
-        return parser.consume(data).compactMap { dialect.streamDelta(fromEventPayload: $0) }
+        var deltas: [String] = []
+        for payload in parser.consume(data) {
+            if let reported = dialect.streamUsage(fromEventPayload: payload) {
+                usage = usage.map { $0.merging(reported) } ?? reported
+            }
+            if let text = dialect.streamDelta(fromEventPayload: payload) {
+                deltas.append(text)
+            }
+        }
+        return deltas
+    }
+
+    func reportedUsage() -> TokenUsage? {
+        lock.lock(); defer { lock.unlock() }
+        return usage
     }
 }

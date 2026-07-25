@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import GatewayCore
 
 // MARK: - Kanonisches Modell
 //
@@ -58,16 +59,6 @@ public struct ChatRequest: Sendable, Codable, Equatable {
         var copy = self
         copy.messages = messages.map { ChatMessage(role: $0.role, content: transform($0.content)) }
         return copy
-    }
-}
-
-public struct TokenUsage: Sendable, Codable, Equatable {
-    public var promptTokens: Int
-    public var completionTokens: Int
-
-    public init(promptTokens: Int, completionTokens: Int) {
-        self.promptTokens = promptTokens
-        self.completionTokens = completionTokens
     }
 }
 
