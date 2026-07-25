@@ -61,6 +61,22 @@ Zwei Stellen:
   genau dort kommt Fremdinhalt herein.
 - **Stufen-Ausfall/Timeout** → `FailureMode.failClosed`.
 
+#### Was `stageBudgetMilliseconds` leistet — und was nicht (Juli 2026)
+
+Das Budget wird **nach** jeder Stufe ausgewertet, nicht als Abbruch währenddessen.
+Reißt eine Stufe es, trägt ihr `StageTiming` `timedOut`, die Entscheidung wird
+`degraded`, und `failureMode` bestimmt den Ausgang: `failClosed` blockt mit
+`GW-002`, `failOpen` lässt durch — beides sichtbar im Audit, denn auch das
+Durchlassen ist dann eine ungeprüft getroffene Entscheidung.
+
+Ein echter Abbruch wäre hier eine Illusion: beide Stufen sind reine Regex-Läufe
+ohne Netz-I/O, und ein Backtracking-Lauf lässt sich in Swift nicht von außen
+unterbrechen. Ihn in einer Nebenaufgabe verhungern zu lassen würde unter genau
+der Last Threads stapeln, gegen die das Budget schützen soll. Die harte
+Laufzeitgrenze der Regeln ist deshalb `maxInputBytes` (Stufe 2), nicht das
+Budget. Sobald eine Stufe mit echtem I/O dazukommt (ClamAV-Socket, Embedder),
+braucht **die** eine Abbruchsemantik — das ist dann eine eigene Festlegung.
+
 ### Harte Eingabegrenze vor jedem Scan
 `GatewayPolicy.maxInputBytes` bricht ab, statt nur Risiko aufzuschlagen. Ohne
 diese Grenze läuft jedes Regelwerk über beliebig große Eingaben — das Gateway

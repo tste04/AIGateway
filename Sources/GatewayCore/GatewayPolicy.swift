@@ -23,8 +23,15 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
     public var blockThreshold: Double
     /// Verhalten bei Stufen-Ausfall/Timeout.
     public var failureMode: FailureMode
-    /// Zeitbudget je Stufe. Das Gateway liegt im synchronen Pfad —
-    /// eine haengende Stufe darf nicht die ganze Anfrage haengen lassen.
+    /// Zeitbudget je Stufe. Wer laenger braucht, gilt als unzuverlaessig: das
+    /// Ergebnis wird nach `failureMode` behandelt und die Entscheidung als
+    /// `degraded` markiert (Befund `GW-002`).
+    ///
+    /// Das ist eine Bewertung NACH der Stufe, kein Abbruch. Die Stufen sind
+    /// reine Regex-Laeufe ohne Netz-I/O; ein durchdrehender Backtracking-Lauf
+    /// laesst sich nicht von aussen unterbrechen, und ihn in einer Nebenaufgabe
+    /// verhungern zu lassen wuerde unter Last Threads stapeln. Die harte
+    /// Laufzeitgrenze der Regeln ist `maxInputBytes`, nicht dieses Budget.
     public var stageBudgetMilliseconds: Double
     /// Harte Obergrenze der Eingabe. Wird VOR jedem Scan geprueft und fuehrt
     /// zum sofortigen Abbruch — nicht bloss zu einem Risiko-Aufschlag.
