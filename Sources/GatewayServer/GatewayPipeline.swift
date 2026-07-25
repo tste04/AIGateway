@@ -69,13 +69,24 @@ public actor GatewayPipeline {
         // uebersieht jede Bereinigung, die zufaellig denselben Text erzeugt.
         var wasModified = false
 
-        // Stufe 1 — harte Eingabegrenze. VOR jedem Regelwerk, sonst laeuft es
-        // ueber beliebig grosse Eingaben.
+        // Stufe 1 — harte Eingabegrenzen. VOR jedem Regelwerk, sonst laeuft es
+        // ueber beliebig grosse Eingaben. Beide Achsen pruefen: die Byte-Grenze
+        // deckelt die Textmenge, die Stueckzahl-Grenze die Anzahl der
+        // Scanner-Laeufe — 100.000 Kleinst-Nachrichten reissen die Byte-Grenze
+        // nicht, kosten aber 100.000 Regelwerks-Durchgaenge.
         let payloadBytes = request.scannableText.utf8.count
         if payloadBytes > policy.maxInputBytes {
             let finding = Finding(
                 ruleID: Self.ruleOversizedInput, category: .anomaly, severity: .high, weight: 1.0,
                 message: "request exceeds maxInputBytes (\(payloadBytes) > \(policy.maxInputBytes))")
+            return blocked(correlationID: correlationID, principal: principal, model: request.model,
+                           findings: [finding], risk: 1.0,
+                           content: "", timings: [], bytes: payloadBytes)
+        }
+        if request.messages.count > policy.maxMessages {
+            let finding = Finding(
+                ruleID: Self.ruleTooManyMessages, category: .anomaly, severity: .high, weight: 1.0,
+                message: "request exceeds maxMessages (\(request.messages.count) > \(policy.maxMessages))")
             return blocked(correlationID: correlationID, principal: principal, model: request.model,
                            findings: [finding], risk: 1.0,
                            content: "", timings: [], bytes: payloadBytes)
@@ -180,6 +191,7 @@ public actor GatewayPipeline {
 
     public static let ruleOversizedInput: RuleID = "GW-001"
     public static let ruleStageBudgetExceeded: RuleID = "GW-002"
+    public static let ruleTooManyMessages: RuleID = "GW-003"
 
     // MARK: - Hilfen
 

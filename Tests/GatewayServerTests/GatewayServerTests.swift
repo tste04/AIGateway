@@ -355,6 +355,23 @@ final class GatewayPipelineTests: XCTestCase {
         XCTAssertTrue(outcome.decision.timings.allSatisfy { !$0.timedOut })
     }
 
+    func testTooManyMessagesAreBlockedBeforeScanning() async {
+        // Die Byte-Grenze deckelt Text, nicht Stueckzahl — viele
+        // Kleinst-Nachrichten muessen an der eigenen Grenze scheitern.
+        var policy = GatewayPolicy.standard
+        policy.maxMessages = 3
+        let pipeline = GatewayPipeline(policy: policy)
+        let request = ChatRequest(model: "m", messages: (0..<4).map { _ in
+            ChatMessage(role: .user, content: "x")
+        })
+        let outcome = await pipeline.process(request, principal: .anonymous)
+        XCTAssertEqual(outcome.decision.disposition, .block)
+        XCTAssertTrue(outcome.decision.findings.contains {
+            $0.ruleID == GatewayPipeline.ruleTooManyMessages
+        })
+        XCTAssertTrue(outcome.decision.timings.isEmpty, "kein Scan vor dem Guard")
+    }
+
     func testOversizedRequestIsBlockedBeforeScanning() async {
         var policy = GatewayPolicy.standard
         policy.maxInputBytes = 100

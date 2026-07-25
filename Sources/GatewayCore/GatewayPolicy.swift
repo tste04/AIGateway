@@ -37,6 +37,11 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
     /// zum sofortigen Abbruch — nicht bloss zu einem Risiko-Aufschlag.
     /// Ohne diese Grenze laeuft jedes Regelwerk ueber beliebig grosse Eingaben.
     public var maxInputBytes: Int
+    /// Harte Obergrenze der Nachrichtenzahl je Anfrage. `maxInputBytes` deckelt
+    /// die Textmenge, nicht die Stueckzahl — sehr viele Kleinst-Nachrichten
+    /// wuerden sonst je Nachricht volle Scanner-Laeufe ausloesen, ohne die
+    /// Byte-Grenze zu reissen.
+    public var maxMessages: Int
     /// Regel-IDs, die nicht zum Risiko beitragen (bleiben im Audit sichtbar).
     /// Die Escape-Luke fuer Fehlalarme — z. B. Sicherheits-Dokumentation, die
     /// Angriffsmuster zitiert und sonst dauerhaft blockiert wuerde.
@@ -47,12 +52,14 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
         failureMode: FailureMode = .failClosed,
         stageBudgetMilliseconds: Double = 50,
         maxInputBytes: Int = 1_000_000,
+        maxMessages: Int = 1_000,
         suppressedRules: Set<RuleID> = []
     ) {
         self.blockThreshold = blockThreshold
         self.failureMode = failureMode
         self.stageBudgetMilliseconds = stageBudgetMilliseconds
         self.maxInputBytes = maxInputBytes
+        self.maxMessages = maxMessages
         self.suppressedRules = suppressedRules
     }
 

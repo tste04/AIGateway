@@ -177,6 +177,22 @@ Nachricht mit der Vertrauensstufe ihrer Rolle:
 Dieselbe Zeichenfolge wird dadurch in einer Systemnachricht durchgelassen und in
 einer Tool-Ausgabe geblockt. Das ist beabsichtigt.
 
+### Risiko je Nachricht: Maximum statt Summe
+
+Die Pipeline bewertet jede Nachricht einzeln und nimmt das **Maximum** der
+Risiken, keine Summe über die Anfrage. Das ist eine Folge der Provenienz:
+jede Nachricht trägt ihren eigenen Trust-Multiplikator, und eine Summe über
+verschieden gewichtete Werte hätte keine sinnvolle Einheit — 0.3 aus einer
+Systemnachricht und 0.3 aus einer Tool-Ausgabe sind nicht dasselbe Risiko.
+
+Der bekannte Preis: zwei mittlere Befunde, auf zwei Nachrichten verteilt,
+addieren sich nicht (2 × 0.405 blockt nicht, 1 × 0.81 schon). Das ist
+akzeptiert, weil die Muster, die blocken sollen, innerhalb **einer** Nachricht
+zünden — ein Angreifer, der seine Anweisung über Nachrichten verteilt,
+zerreißt damit auch die Wortfolgen, auf denen die Regeln matchen. Wer
+Kumulativ-Verhalten braucht, senkt `blockThreshold`, statt die Verrechnung zu
+ändern.
+
 ### De-Maskierung im Datenstrom
 
 Ein Platzhalter kann über SSE-Chunks zerfallen (`"...[Pers"` / `"on-1]..."`).
