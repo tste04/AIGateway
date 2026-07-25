@@ -57,12 +57,25 @@ public protocol ProviderAdapter: Sendable {
     /// sogar auf zwei Ereignisse verteilt. Teilmeldungen sind erlaubt, der
     /// Aufrufer vereinigt sie ueber `TokenUsage.merging`.
     func streamUsage(fromEventPayload payload: String) -> TokenUsage?
+
+    /// Baut ein Fehler-Ereignis fuer den AUSGEHENDEN Strom.
+    ///
+    /// Noetig, weil ein Upstream-Fehler nach `beginStream` nicht mehr als
+    /// HTTP-Status ausdrueckbar ist — der Client muss den Fehler im Strom
+    /// selbst erfahren, sonst sieht ein Abbruch wie eine vollstaendige
+    /// Antwort aus.
+    func encodeStreamError(_ message: String) -> String
 }
 
 public extension ProviderAdapter {
     /// Nicht jeder Dialekt meldet Verbrauch im Strom. Wer nichts meldet,
     /// liefert `nil` — geschaetzt wird nie.
     func streamUsage(fromEventPayload payload: String) -> TokenUsage? { nil }
+
+    /// Generische Form fuer Dialekte ohne eigenes Fehlerformat.
+    func encodeStreamError(_ message: String) -> String {
+        JSONHelper.compactJSONLine(["error": message])
+    }
 }
 
 // MARK: - Hilfen
@@ -213,6 +226,10 @@ public struct OpenAIAdapter: ProviderAdapter {
         return TokenUsage(promptTokens: usage["prompt_tokens"] as? Int ?? 0,
                           completionTokens: usage["completion_tokens"] as? Int ?? 0)
     }
+
+    public func encodeStreamError(_ message: String) -> String {
+        JSONHelper.compactJSONLine(["error": ["message": message, "type": "upstream_error"]])
+    }
 }
 
 // MARK: - Anthropic
@@ -342,6 +359,13 @@ public struct AnthropicAdapter: ProviderAdapter {
         return TokenUsage(promptTokens: usage["input_tokens"] as? Int ?? 0,
                           completionTokens: usage["output_tokens"] as? Int ?? 0)
     }
+
+    public func encodeStreamError(_ message: String) -> String {
+        JSONHelper.compactJSONLine([
+            "type": "error",
+            "error": ["type": "api_error", "message": message],
+        ])
+    }
 }
 
 // MARK: - Ollama
@@ -450,6 +474,10 @@ public struct OllamaAdapter: ProviderAdapter {
         let completion = dict["eval_count"] as? Int
         guard prompt != nil || completion != nil else { return nil }
         return TokenUsage(promptTokens: prompt ?? 0, completionTokens: completion ?? 0)
+    }
+
+    public func encodeStreamError(_ message: String) -> String {
+        JSONHelper.compactJSONLine(["error": message, "done": true])
     }
 }
 

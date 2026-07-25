@@ -21,17 +21,24 @@ public struct GatewayConfiguration: Sendable {
     public var upstreamBaseURL: URL
     public var apiKey: String?
     public var maxBodyBytes: Int
+    /// Regel-IDs im 403 und Upstream-Detail im 502 mitsenden. Default AUS:
+    /// beides sind Informationslecks an den Aufrufer (Tuning-Orakel bzw.
+    /// fremder Fehlerkoerper). Betreiber korrelieren stattdessen ueber die
+    /// `correlation_id` mit dem Audit-Log.
+    public var debugErrorDetails: Bool
 
     public init(port: UInt16 = 8080, loopbackOnly: Bool = true,
                 upstream: ProviderKind = .ollama,
                 upstreamBaseURL: URL = URL(string: "http://127.0.0.1:11434")!,
-                apiKey: String? = nil, maxBodyBytes: Int = 1_000_000) {
+                apiKey: String? = nil, maxBodyBytes: Int = 1_000_000,
+                debugErrorDetails: Bool = false) {
         self.port = port
         self.loopbackOnly = loopbackOnly
         self.upstream = upstream
         self.upstreamBaseURL = upstreamBaseURL
         self.apiKey = apiKey
         self.maxBodyBytes = maxBodyBytes
+        self.debugErrorDetails = debugErrorDetails
     }
 }
 
@@ -125,11 +132,19 @@ public final class GatewayService: @unchecked Sendable {
         onAudit?(outcome.audit)
 
         guard let forward = outcome.forward else {
-            return connection.respond(status: 403, json: [
+            // Die getroffenen Regel-IDs stehen NICHT in der Standard-Antwort:
+            // sie sind ein Tuning-Orakel — ein Angreifer erfaehrt regelgenau,
+            // was angeschlagen hat, und variiert dagegen. Betreiber korrelieren
+            // ueber die correlation_id mit dem Audit-Log; wer die IDs dennoch
+            // im Fehler sehen will (Entwicklung), setzt `debugErrorDetails`.
+            var payload: [String: Any] = [
                 "error": "blocked by input firewall",
                 "correlation_id": outcome.decision.correlationID,
-                "rules": outcome.decision.findings.map { $0.ruleID.rawValue },
-            ])
+            ]
+            if configuration.debugErrorDetails {
+                payload["rules"] = outcome.decision.findings.map { $0.ruleID.rawValue }
+            }
+            return connection.respond(status: 403, json: payload)
         }
 
         let handoff = GatewayHandoff(
@@ -155,7 +170,27 @@ public final class GatewayService: @unchecked Sendable {
             emitCompletion(handoff, model: facts.model, usage: facts.usage,
                            since: upstreamStart, streamed: forward.stream, status: 200)
         } catch {
-            connection.respond(status: 502, json: ["error": "upstream failure", "detail": "\(error)"])
+            if forward.stream {
+                // Der Strom hat begonnen (`beginStream` ist der erste Schritt von
+                // `relayStream`) — ein 502 ist nicht mehr moeglich, `respond`
+                // liefe in den Streaming-Riegel und taete NICHTS. Ein stummer
+                // Abbruch saehe fuer den Client wie eine vollstaendige Antwort
+                // aus. Stattdessen: Fehler-Ereignis im Dialekt des Clients,
+                // dann Ende — und bewusst KEIN Terminator danach, der wuerde
+                // regulaeren Abschluss signalisieren.
+                connection.writeChunk(Self.frame(
+                    inbound.encodeStreamError("upstream failure"), as: inbound.framing))
+                connection.endStream()
+            } else {
+                var payload: [String: Any] = [
+                    "error": "upstream failure",
+                    "correlation_id": handoff.correlationID,
+                ]
+                // Das Upstream-Detail kann dessen Fehlerkoerper enthalten —
+                // nicht ungefragt an den Client reichen.
+                if configuration.debugErrorDetails { payload["detail"] = "\(error)" }
+                connection.respond(status: 502, json: payload)
+            }
             // Auch der Fehlschlag ist eine Kostenzeile: er hat Zeit gekostet und
             // je nach Abbruchzeitpunkt beim Provider auch Tokens.
             emitCompletion(handoff, model: forward.model, usage: nil,
