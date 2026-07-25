@@ -1,0 +1,120 @@
+// Copyright (c) 2026 Tommy Stellmacher
+// SPDX-License-Identifier: Apache-2.0
+
+import Foundation
+import GatewayCore
+
+// MARK: - Abwaerts-Naht
+//
+// Im Zielbild liegt unter dem Gateway die Policy Engine; implementiert ist
+// heute der Modellanbieter selbst. Beides ist richtig — der Proxy laeuft allein
+// und liefert sofort Wert. Damit daraus spaeter eine Stufe wird, ohne den
+// Antwortpfad umzubauen, laeuft der Weg nach unten ueber diese Naht.
+//
+// Der Strom liefert bewusst nur TEXT-Zuwaechse. Rahmung und Dialekt des Ziels
+// gehoeren der Implementierung, De-Maskierung und ausgehende Rahmung bleiben
+// beim Aufrufer — sonst muesste jede Implementierung die Maskierung kennen,
+// und die Klammer waere nicht mehr an einer Stelle geschlossen.
+
+/// Was das Gateway nach unten reicht.
+///
+/// Traegt die MASKIERTE Anfrage plus das Ergebnis der Firewall — nie den
+/// Rohtext. Dasselbe Prinzip wie bei `AuditEvent`: die naechste Stufe braucht
+/// die Bewertung, nicht das Beweisstueck.
+public struct GatewayHandoff: Sendable {
+    public let correlationID: String
+    public let principal: Principal
+    /// Maskiert und bereinigt — das, was ein Modell sehen darf.
+    public let request: ChatRequest
+    public let disposition: Disposition
+    public let riskScore: Double
+    public let findings: [Finding]
+
+    public init(correlationID: String, principal: Principal, request: ChatRequest,
+                disposition: Disposition, riskScore: Double, findings: [Finding]) {
+        self.correlationID = correlationID
+        self.principal = principal
+        self.request = request
+        self.disposition = disposition
+        self.riskScore = riskScore
+        self.findings = findings
+    }
+}
+
+public protocol Downstream: Sendable {
+    /// Einmalige Antwort.
+    func send(_ handoff: GatewayHandoff) async throws -> ChatResponse
+
+    /// Antwortstrom. `onDelta` bekommt Text-Zuwaechse, bereits aus der Rahmung
+    /// des Ziels geloest — und wird aus einem Hintergrund-Thread aufgerufen.
+    func stream(_ handoff: GatewayHandoff,
+                onDelta: @escaping @Sendable (String) -> Void) async throws
+}
+
+// MARK: - Ziel: ein Modellanbieter
+
+/// Reicht direkt an einen Provider weiter. Die heutige Betriebsart.
+public struct ProviderDownstream: Downstream {
+
+    private let dialect: ProviderAdapter
+    private let baseURL: URL
+    private let apiKey: String?
+    private let client: UpstreamClient
+
+    public init(dialect: ProviderAdapter, baseURL: URL, apiKey: String? = nil,
+                client: UpstreamClient = UpstreamClient()) {
+        self.dialect = dialect
+        self.baseURL = baseURL
+        self.apiKey = apiKey
+        self.client = client
+    }
+
+    public func send(_ handoff: GatewayHandoff) async throws -> ChatResponse {
+        var request = handoff.request
+        request.stream = false
+        let body = try dialect.encodeRequest(request)
+        let data = try await client.send(
+            url: dialect.upstreamURL(base: baseURL),
+            headers: dialect.authHeaders(apiKey: apiKey),
+            body: body)
+        return try dialect.decodeResponse(data)
+    }
+
+    public func stream(_ handoff: GatewayHandoff,
+                       onDelta: @escaping @Sendable (String) -> Void) async throws {
+        var request = handoff.request
+        request.stream = true
+
+        // Eigener Name statt `self.dialect` im Rueckruf: der Strom-Callback ist
+        // `@Sendable`, und was er anfasst, soll hier sichtbar gebunden sein.
+        let target = dialect
+        let body = try target.encodeRequest(request)
+        let events = EventState(framing: target.framing)
+
+        try await client.stream(
+            url: target.upstreamURL(base: baseURL),
+            headers: target.authHeaders(apiKey: apiKey),
+            body: body
+        ) { data in
+            for text in events.consume(data, using: target) { onDelta(text) }
+        }
+    }
+}
+
+/// Ereignis-Zerlegung ueber Chunk-Grenzen hinweg. Der Rueckruf kommt aus einem
+/// Hintergrund-Thread und `EventStreamParser` ist ein mutierender Wert —
+/// deshalb gekapselt und gesperrt.
+private final class EventState: @unchecked Sendable {
+
+    private var parser: EventStreamParser
+    private let lock = NSLock()
+
+    init(framing: StreamFraming) {
+        self.parser = EventStreamParser(framing: framing)
+    }
+
+    func consume(_ data: Data, using dialect: ProviderAdapter) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return parser.consume(data).compactMap { dialect.streamDelta(fromEventPayload: $0) }
+    }
+}

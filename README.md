@@ -4,9 +4,10 @@ Ein souveränes **AI Gateway** in Swift: die Schicht zwischen Nutzer und
 Sprachmodell, die prüft, was hineingeht — deterministisch, netzfrei im Kern,
 ohne externe Abhängigkeiten.
 
-> **Status: früh.** `GatewayCore` (Verträge und Entscheidungstypen) und die
-> Injection-Stufe der Input Firewall stehen. PII, DLP, Malware, Semantic Cache
-> und der HTTP-Server sind **noch nicht gebaut** — siehe Fahrplan unten.
+> **Status: früh.** `GatewayCore`, die Injection- und die PII-Stufe der Input
+> Firewall sowie der HTTP-/SSE-Server mit den drei Provider-Adaptern stehen.
+> DLP, Malware und Semantic Cache sind **noch nicht gebaut** — siehe Fahrplan
+> unten.
 
 ## Einordnung
 
