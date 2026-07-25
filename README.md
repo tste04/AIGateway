@@ -4,9 +4,8 @@ Eine Input Firewall in Swift: die Schicht zwischen Client und Sprachmodell, die
 prüft, was hineingeht. Deterministisch, netzfrei im Kern, ohne externe
 Abhängigkeiten außer `Foundation`.
 
-> **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE.md) — nichtkommerzielle
-> Nutzung ist kostenlos, jede kommerzielle Nutzung erfordert eine kostenpflichtige
-> kommerzielle Lizenz. Siehe [COMMERCIAL.md](COMMERCIAL.md).
+**Lizenz:** PolyForm Noncommercial 1.0.0 — nichtkommerziell frei, kommerziell
+kostenpflichtig (siehe [Lizenz](#lizenz) / [COMMERCIAL.md](COMMERCIAL.md)).
 
 ## Einordnung
 
@@ -190,19 +189,22 @@ swift test --filter InputFirewallTests.PIIRoundTripTests/testMaskThenUnmaskResto
 
 ## Lizenz
 
-AIGateway steht unter der [PolyForm Noncommercial License 1.0.0](LICENSE.md).
-Nichtkommerzielle Nutzung ist kostenlos; jede kommerzielle Nutzung erfordert eine
-kostenpflichtige kommerzielle Lizenz — Editionen und Konditionen in
-[COMMERCIAL.md](COMMERCIAL.md), Konditionen auf Verhandlungsbasis.
+AIGateway ist **dual-lizenziert**:
 
-Kontakt für kommerzielle Anfragen:
-[hello@tstellmacher.com](mailto:hello@tstellmacher.com)
+- **Nichtkommerzielle Nutzung** ist kostenlos unter der
+  [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+- **Kommerzielle Nutzung** (Einsatz im Unternehmen, Einbettung in ein Produkt,
+  Teil eines bezahlten Dienstes) erfordert eine kommerzielle Lizenz — Konditionen
+  auf Verhandlungsbasis, siehe [COMMERCIAL.md](COMMERCIAL.md).
 
-Wie die Komponenten dieses Portfolios lizenziert werden — einzeln und als
-Distribution — steht in [LICENSING.md](LICENSING.md).
+Die komponentenübergreifende Lizenz-Policy (Schichtenmodell, Distribution,
+Chain of Title) steht in [LICENSING.md](LICENSING.md).
+
+Kommerzielle Anfragen: **[hello@tstellmacher.com](mailto:hello@tstellmacher.com)**
+
+Copyright 2026 Tommy Stellmacher.
 
 ## Beiträge
 
-Issues und Pull Requests sind willkommen. Jeder Beitrag erfordert die Zustimmung
-zum [Contributor License Agreement](docs/CLA.md); Ablauf und Invarianten stehen
-in [CONTRIBUTING.md](CONTRIBUTING.md).
+Beiträge sind willkommen und erfordern das CLA ([docs/CLA.md](docs/CLA.md)) —
+Details in [CONTRIBUTING.md](CONTRIBUTING.md).
