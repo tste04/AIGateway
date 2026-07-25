@@ -189,6 +189,38 @@ final class AuditEventTests: XCTestCase {
     }
 }
 
+// MARK: - Abschluss
+
+final class CompletionEventTests: XCTestCase {
+
+    func testCarriesCostFactsAndNoPayload() throws {
+        let event = CompletionEvent(
+            correlationID: "corr-1",
+            principal: Principal(subject: "anna", tenant: "acme"),
+            model: "llama3",
+            usage: TokenUsage(promptTokens: 12, completionTokens: 34),
+            upstreamMilliseconds: 91.5,
+            streamed: true,
+            status: 200)
+        let json = String(data: try JSONEncoder().encode(event), encoding: .utf8) ?? ""
+
+        XCTAssertTrue(json.contains("corr-1"))
+        XCTAssertTrue(json.contains("llama3"))
+        XCTAssertTrue(json.contains("acme"))
+        XCTAssertEqual(event.usage?.totalTokens, 46)
+        XCTAssertFalse(event.cacheHit, "es gibt noch keinen Cache")
+    }
+
+    func testUsageStaysNilWhenProviderReportsNone() {
+        let event = CompletionEvent(
+            correlationID: "c", principal: .anonymous, model: "m",
+            usage: nil, upstreamMilliseconds: 1, streamed: false, status: 502)
+        // Keine Meldung heisst keine Zahl — hier wird nie geschaetzt.
+        XCTAssertNil(event.usage)
+        XCTAssertEqual(event.status, 502)
+    }
+}
+
 // MARK: - Regel-IDs
 
 final class RuleIDTests: XCTestCase {

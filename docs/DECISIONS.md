@@ -61,6 +61,22 @@ Zwei Stellen:
   genau dort kommt Fremdinhalt herein.
 - **Stufen-Ausfall/Timeout** → `FailureMode.failClosed`.
 
+#### Was `stageBudgetMilliseconds` leistet — und was nicht (Juli 2026)
+
+Das Budget wird **nach** jeder Stufe ausgewertet, nicht als Abbruch währenddessen.
+Reißt eine Stufe es, trägt ihr `StageTiming` `timedOut`, die Entscheidung wird
+`degraded`, und `failureMode` bestimmt den Ausgang: `failClosed` blockt mit
+`GW-002`, `failOpen` lässt durch — beides sichtbar im Audit, denn auch das
+Durchlassen ist dann eine ungeprüft getroffene Entscheidung.
+
+Ein echter Abbruch wäre hier eine Illusion: beide Stufen sind reine Regex-Läufe
+ohne Netz-I/O, und ein Backtracking-Lauf lässt sich in Swift nicht von außen
+unterbrechen. Ihn in einer Nebenaufgabe verhungern zu lassen würde unter genau
+der Last Threads stapeln, gegen die das Budget schützen soll. Die harte
+Laufzeitgrenze der Regeln ist deshalb `maxInputBytes` (Stufe 2), nicht das
+Budget. Sobald eine Stufe mit echtem I/O dazukommt (ClamAV-Socket, Embedder),
+braucht **die** eine Abbruchsemantik — das ist dann eine eigene Festlegung.
+
 ### Harte Eingabegrenze vor jedem Scan
 `GatewayPolicy.maxInputBytes` bricht ab, statt nur Risiko aufzuschlagen. Ohne
 diese Grenze läuft jedes Regelwerk über beliebig große Eingaben — das Gateway
@@ -176,6 +192,141 @@ Platzhalter-Grenze.
 Eine Anfrage je Verbindung. Spart den halben Zustandsautomaten; der Durchsatz
 eines Gateways hängt am Modell, nicht am Socket.
 
+## Nähte zum Gesamtbild (Juli 2026)
+
+Das Zielbild ist mehr als diese Box: unterhalb folgen Policy Engine, Router,
+Context Orchestrator, Agent Loop, Output Guardrails, Approval und Action Layer,
+dahinter Audit • Metrics • FinOps • Evaluation mit einem Feedback Loop zurück.
+Der Umfang dieses Repos bleibt die eine Box — aber die **Nähte** zu den
+Nachbarn werden hier festgelegt, weil sie Signaturen bestimmen und weil sie
+sonst später an der falschen Stelle entstehen.
+
+### Der Geltungsbereich der Erkennung ist breiter als das Gateway
+
+Der `⚠️ Injection-Scan auf Retrieved Content` im Context Orchestrator ist
+derselbe Baustein wie die Injection-Stufe hier — `SourceTrustResolver`
+katalogisiert bereits wörtlich dessen Quellen (`confluence`, `sharepoint`,
+`jira`, `gitlab`, `rag_chunk`, `retrieval`, `wiki`, `crawl`).
+
+Festlegung: **`GatewayCore` + `InputFirewall` sind ein wiederverwendbares Paar.**
+Der Orchestrator zieht diese beiden Targets direkt; `GatewayServer` ist der
+Gateway-spezifische Aufsatz und darf nie zur Voraussetzung für eine
+Erkennungsstufe werden. Ohne diese Zusage baut der Orchestrator seinen eigenen
+zweiten Scanner — mit eigenen Regel-IDs, an denen dann andere SIEM-Regeln
+hängen.
+
+### Identität wird vorausgesetzt, nicht geprüft
+
+`Principal` entsteht aus den Headern `x-gateway-subject`, `x-gateway-tenant`,
+`x-gateway-scopes` — **ungeprüft**. Das ist die Arbeitsteilung mit der
+Identity/SSO-Stufe darüber und nur haltbar, solange das Gateway auf Loopback
+bindet und nichts anderes es erreicht.
+
+**Sperrvermerk für Rang 5:** `Principal.cachePartition` leitet sich aus Mandant
+und Scopes ab. Solange beide aus einem fälschbaren Header stammen, wählt ein
+Angreifer seine Cache-Partition frei — der Semantic Cache wäre dann genau der
+Access-Control-Bypass, gegen den er partitioniert wird. Der Cache darf erst
+beginnen, wenn die Herkunft des `Principal` verifiziert ist (signiertes Token
+oder ein Transportweg, den nur die Identity-Stufe erreicht).
+
+### Abwärts-Naht: heute Provider, später die nächste Box
+
+Implementiert ist ein Proxy — `GatewayConfiguration.upstream` zeigt auf einen
+Modellanbieter, nicht auf die Policy Engine. Das ist bewusst: so läuft das
+Gateway allein und liefert sofort Wert.
+
+Festlegung: Die Abwärts-Naht wird als Abstraktion eingezogen (`Downstream`),
+mit der Provider-Variante als erster Implementierung. Die Stufen-Variante, die
+`(maskierte Anfrage, Entscheidung, Principal)` an die nächste Box reicht, kommt
+als **zusätzliche** Implementierung, wenn die Policy Engine existiert — nicht
+als Umbau. Was nach unten geht, trägt **nie** den Rohtext: die nächste Box
+bekommt die maskierte Anfrage plus Befunde und Risiko, nach demselben Prinzip,
+nach dem `AuditEvent` den Payload fallen lässt.
+
+### Die Maskierungs-Klammer muss den Agent Loop überleben
+
+Zwischen Maskierung und De-Maskierung liegen im Zielbild Router, Orchestrator,
+`n` Iterationen Agent Loop, Output Guardrails und — bei hohem Risiko — eine
+**menschliche Freigabe**. Das sind Minuten bis Stunden, nicht Millisekunden.
+`MaskingSession` als lokale Variable einer HTTP-Anfrage trägt das nicht.
+
+Vier Festlegungen für den kommenden `MaskingSessionStore`:
+
+1. **Nur im Speicher, niemals persistiert.** Die Zuordnung ist Klartext-PII.
+   Sie auf Platte zu schreiben machte ausgerechnet die Komponente, die PII vom
+   Provider fernhält, zu deren dauerhaftem Speicher — dasselbe Argument, das
+   `AuditEvent` payload-frei hält.
+2. **Verlust ist sichtbar, nicht still.** Fehlt die Session, geht die Antwort
+   **mit Platzhaltern** hinaus. Nicht raten, und nicht ersatzweise aus dem
+   globalen Vault auflösen — das wäre genau der mehrmandantenunsichere Rückweg,
+   den `MaskingSession` vermeidet. Der Nutzer sieht `[Person-1]` und meldet es.
+3. **Der Zugriff ist an die Partition gebunden**, nicht nur an die
+   `correlationID`. Eine UUID zu raten ist unwahrscheinlich; die Bindung kostet
+   nichts und schließt die Klasse aus.
+4. **Zwei Fristen.** Kurzer Default (Größenordnung Minuten) für den
+   Auto-Execute-Pfad, plus ein ausdrückliches Verlängern für Vorgänge, die in
+   die menschliche Freigabe gehen. Eine einzige Frist, die beides abdeckt,
+   hielte Klardaten stundenlang für **jede** Anfrage vor.
+
+Dazu die Reihenfolge-Festlegung: **De-Maskierung ist der letzte Schritt der
+Kette, nach den Output Guardrails.** Deren PII- und Compliance-Prüfung muss
+Klartext sehen; hinter der De-Maskierung prüfte sie Platzhalter und fände
+nichts.
+
+### Audit und Abschluss sind zwei Ereignisse
+
+`AuditEvent` bleibt und feuert **sofort nach der Entscheidung**, vor dem Weg
+nach oben. Stirbt der Prozess während des Modellaufrufs, existiert die
+Firewall-Entscheidung trotzdem im Log; ein einziges Ereignis am Ende verlöre
+ausgerechnet die sicherheitsrelevante Aufzeichnung.
+
+Auf dem Rückweg kommt ein zweites, über `correlationID` verknüpftes Ereignis:
+Modell, Token-Verbrauch, Upstream-Latenz, Cache-Treffer. Begründung: Das
+Gateway ist die **einzige** Stelle im Zielbild, die Anfrage und Antwort
+zusammen sieht — lässt es die Zahlen fallen, kann die FinOps-Box sie nirgends
+mehr einsammeln. Heute werden sie dekodiert und verworfen.
+
+**Token-Zahlen werden nie geschätzt.** Liefert ein Provider keine, bleibt das
+Feld leer. Eine erfundene Zahl in einer Kostenrechnung ist schlimmer als eine
+fehlende.
+
+### Eval-Daten kommen nicht aus dem Audit
+
+Der Feedback Loop tunt Router und Guardrails mit Beispielen — also mit Text.
+`AuditEvent` enthält per Invariante niemals Nutzinhalt. Beides ist richtig und
+beides zusammen heißt: **der Feedback Loop kann nicht aus dem Audit-Log
+gespeist werden.** Ohne eine ausdrückliche Festlegung endet das damit, dass
+jemand Prompts ins Audit schreibt und die Invariante bricht.
+
+Festlegung: ein **getrennter** Quarantäne-Pfad (`QuarantineSink`), Default
+**aus** — Opt-in wie jede Expositions-Entscheidung. Drei Stufen:
+
+| Stufe | Inhalt | Einsatz |
+|---|---|---|
+| `counts` | nur Regel-IDs und Häufigkeiten | sicherer Default, wenn überhaupt an |
+| `masked` | PII-maskierter Text | die Arbeitsstufe |
+| `raw` | Rohtext | nur mit ausdrücklicher Betreiber-Entscheidung |
+
+`masked` ist keine Notlösung: Injection-Muster sind **strukturell**, nicht
+namensabhängig — „ignore all previous instructions", Homoglyphen und
+Buchstaben-Sperrung überstehen die Maskierung unbeschadet. Nur wer die
+PII-Regeln selbst tunen will, braucht `raw`.
+
+Gesammelt werden `.block`-Entscheidungen **und eine Stichprobe knapp unter der
+Schwelle** — dort sitzen die Fehlalarme und die knapp durchgerutschten
+Angriffe, also die wertvollsten Beispiele. Dazu eine harte Aufbewahrungsfrist
+in Tagen, die ein Aufräumlauf durchsetzt. Der Haken dafür existiert bereits:
+`GatewayDecision.content` trägt bei `.block` den Originalinhalt.
+
+### Malware braucht erst eine Angriffsfläche (Vorbedingung für Rang 7)
+
+`ChatRequest` kennt nur Text; die Adapter flachen auch Block-Arrays zu Text ab.
+Es gibt keine Anhänge — der Malware-Scan ist also nicht „noch nicht gebaut",
+sondern hat nichts, woran er ansetzen könnte. Vor Rang 7 braucht es eine
+Anhang-Repräsentation im kanonischen Modell und die `PayloadScanner`-Naht auf
+Bytes; `ContentScanner` arbeitet auf `String` und ist dort das falsche Modell.
+Im Ablauf steht Malware **vor** der Injection-Stufe (Schritt 3), nicht daneben.
+
 ## Bekannte Lücken (bewusst offen)
 
 Der Regelkatalog deckt Englisch (INJ-0xx) und Deutsch (INJ-1xx) ab. Andere
@@ -196,6 +347,18 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
-| 5 | Semantic Cache | offen |
+| 5 | Semantic Cache | offen — **gesperrt**, s. Identity-Vorbedingung |
 | 6 | DLP-Policy-Semantik | offen |
-| 7 | Malware (ClamAV-Naht) | offen |
+| 7 | Malware (ClamAV-Naht) | offen — Anhang-Naht fehlt |
+
+Die Ränge sind Feature-Boxen. Die Nähte laufen quer dazu und haben eine eigene
+Reihenfolge:
+
+| Naht | Träger | Stand |
+|---|---|---|
+| Erkennung ohne Transport nutzbar | `GatewayCore` + `InputFirewall` | entschieden, kein Code nötig |
+| Identität vorausgesetzt | Betriebsdoku | entschieden, sperrt Rang 5 |
+| Abwärts-Naht | `Downstream` (Abstraktion) | offen |
+| Abschluss-Ereignis | `CompletionEvent` | offen |
+| Klammer über den Agent Loop | `MaskingSessionStore` | offen |
+| Quarantäne für Eval | `QuarantineSink` | offen |

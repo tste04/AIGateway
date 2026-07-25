@@ -123,10 +123,18 @@ let service = GatewayService(
         upstream: .ollama,                                   // oder .openai / .anthropic
         upstreamBaseURL: URL(string: "http://127.0.0.1:11434")!),
     pipeline: pipeline,
-    onAudit: { event in auditLog.append(event) })
+    onAudit:      { event in auditLog.append(event) },
+    onCompletion: { event in finops.record(event) })
 
 try service.start()
 ```
+
+Zwei Ereignisse, mit Absicht: `AuditEvent` feuert sofort nach der
+Firewall-Entscheidung — stirbt der Prozess während des Modellaufrufs, steht sie
+trotzdem im Log. `CompletionEvent` kommt auf dem Rückweg und trägt, was erst
+dann bekannt ist: Modell, gemeldeten Token-Verbrauch, Upstream-Latenz und
+Ausgang. Verknüpft sind beide über die `correlationID`. Meldet ein Provider
+keinen Verbrauch, bleibt das Feld leer — geschätzt wird nie.
 
 Eingehend werden drei Dialekte bedient: `/v1/chat/completions`, `/v1/messages`
 und `/api/chat`. Eingehender und ausgehender Dialekt sind unabhängig — ein Client

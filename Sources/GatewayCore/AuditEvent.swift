@@ -26,6 +26,9 @@ public struct AuditEvent: Sendable, Codable, Equatable {
     public let tenant: String?
 
     // Was
+    /// Das angefragte Modell. Kein Nutzinhalt, sondern ein Policy-Fakt — auch
+    /// bei `.block` ist interessant, worauf die Anfrage gezielt hat.
+    public let model: String?
     public let disposition: Disposition
     public let riskScore: Double
     public let ruleIDs: [RuleID]
@@ -43,6 +46,7 @@ public struct AuditEvent: Sendable, Codable, Equatable {
         correlationID: String,
         subject: String,
         tenant: String?,
+        model: String? = nil,
         disposition: Disposition,
         riskScore: Double,
         ruleIDs: [RuleID],
@@ -57,6 +61,7 @@ public struct AuditEvent: Sendable, Codable, Equatable {
         self.correlationID = correlationID
         self.subject = subject
         self.tenant = tenant
+        self.model = model
         self.disposition = disposition
         self.riskScore = riskScore
         self.ruleIDs = ruleIDs
@@ -76,6 +81,7 @@ public struct AuditEvent: Sendable, Codable, Equatable {
     public init(
         decision: GatewayDecision,
         principal: Principal,
+        model: String? = nil,
         eventID: String = UUID().uuidString,
         timestamp: Date = Date()
     ) {
@@ -84,6 +90,7 @@ public struct AuditEvent: Sendable, Codable, Equatable {
         self.correlationID = decision.correlationID
         self.subject = principal.subject
         self.tenant = principal.tenant
+        self.model = model
         self.disposition = decision.disposition
         self.riskScore = decision.riskScore
         self.ruleIDs = decision.findings.map(\.ruleID)
