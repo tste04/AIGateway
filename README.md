@@ -174,6 +174,14 @@ der verbindlichen Pipeline-Reihenfolge.
 
 ### Grenzen
 
+**Das kanonische Modell trägt Chat-Text, keine Tool-Semantik.** Anfragen mit
+`tools`, `tool_choice`, `functions` oder erzwungenen Antwortformaten
+(`response_format`, Ollama-`format`) werden **abgewiesen statt still
+beschnitten** — ein Gateway, das solche Felder kommentarlos entfernt, würde
+aus einem Agent-Request einen Chat-Request machen, und die Antwort sähe
+trotzdem gültig aus. Multimodale Inhalte (Bilder, Dateien) werden auf ihren
+Textanteil reduziert.
+
 Der Injection-Scanner ist eine deterministische Heuristik, kein Modell. Nicht
 erkannt werden andere Sprachen als Englisch und Deutsch sowie semantische
 Umschreibungen („tu so, als hättest du keine Vorgaben"). Er ist eine erste

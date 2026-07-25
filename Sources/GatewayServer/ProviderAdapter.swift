@@ -89,6 +89,20 @@ enum JSONHelper {
         return dict
     }
 
+    /// Fail-closed statt still veraendern: Felder, deren Verlust die Semantik
+    /// der Anfrage aendert (Tool-Definitionen, erzwungene Antwortformate),
+    /// werden ABGEWIESEN. Das kanonische Modell traegt sie nicht — ein
+    /// Gateway, das sie kommentarlos entfernt, wuerde aus einem Agent-Request
+    /// einen Chat-Request machen und die Antwort saehe trotzdem gueltig aus.
+    /// Kosmetische Extras (z. B. `user`, `stream_options`) bleiben erlaubt.
+    static func rejectSemanticFields(_ dict: [String: Any], _ fields: [String]) throws {
+        if let present = fields.first(where: { dict[$0] != nil }) {
+            throw GatewayServerError.unsupported(
+                "field '\(present)' is not supported: this gateway forwards chat text only "
+                + "and refuses to silently strip semantics-changing fields")
+        }
+    }
+
     static func data(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
@@ -128,6 +142,8 @@ public struct OpenAIAdapter: ProviderAdapter {
 
     public func decodeRequest(_ data: Data) throws -> ChatRequest {
         let dict = try JSONHelper.object(data)
+        try JSONHelper.rejectSemanticFields(
+            dict, ["tools", "tool_choice", "functions", "function_call", "response_format"])
         guard let model = dict["model"] as? String else {
             throw GatewayServerError.malformedRequest("missing 'model'")
         }
@@ -248,6 +264,7 @@ public struct AnthropicAdapter: ProviderAdapter {
 
     public func decodeRequest(_ data: Data) throws -> ChatRequest {
         let dict = try JSONHelper.object(data)
+        try JSONHelper.rejectSemanticFields(dict, ["tools", "tool_choice"])
         guard let model = dict["model"] as? String else {
             throw GatewayServerError.malformedRequest("missing 'model'")
         }
@@ -380,6 +397,7 @@ public struct OllamaAdapter: ProviderAdapter {
 
     public func decodeRequest(_ data: Data) throws -> ChatRequest {
         let dict = try JSONHelper.object(data)
+        try JSONHelper.rejectSemanticFields(dict, ["tools", "format"])
         guard let model = dict["model"] as? String else {
             throw GatewayServerError.malformedRequest("missing 'model'")
         }

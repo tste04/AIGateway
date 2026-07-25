@@ -241,6 +241,19 @@ Clients** (`encodeStreamError`), danach Verbindungsende, und bewusst **kein
 Terminator** (`[DONE]`/`message_stop`) — der würde regulären Abschluss
 signalisieren.
 
+### Fail-closed statt still verändern (Tool-Felder)
+
+Das kanonische Modell trägt Chat-Text. Felder, deren Verlust die **Semantik**
+der Anfrage ändert — `tools`, `tool_choice`, `functions`, `response_format`,
+Ollama-`format` — werden beim Dekodieren **abgewiesen**, nicht entfernt: aus
+einem Agent-Request würde sonst still ein Chat-Request, und die Antwort sähe
+gültig aus. Kosmetische Extras (`user`, `stream_options`, `seed`) passieren
+weiterhin unbeachtet — ihr Verlust ändert keine Bedeutung.
+
+Wer Tool-Calling durch das Gateway will, erweitert zuerst das kanonische
+Modell (inklusive Firewall-Bewertung der Tool-Definitionen und -Antworten) —
+das ist dieselbe Vorbedingungs-Logik wie bei Malware und Anhängen.
+
 ### Fehlerdetails sind eine Betriebsoption
 
 Die Standard-Fehlerantworten nennen **keine** Regel-IDs (403) und **kein**
