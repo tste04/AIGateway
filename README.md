@@ -39,7 +39,7 @@ Output Guardrails sind nicht Teil davon.
 Als SwiftPM-Abhängigkeit:
 
 ```swift
-.package(url: "https://github.com/rdtste/AIGateway.git", branch: "main")
+.package(url: "https://github.com/tste04/AIGateway.git", branch: "main")
 ```
 
 Die drei Produkte sind `GatewayCore` (Typen und Verträge), `InputFirewall`
