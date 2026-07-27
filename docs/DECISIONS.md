@@ -423,7 +423,7 @@ Zwischen Maskierung und De-Maskierung liegen im Zielbild Router, Orchestrator,
 **menschliche Freigabe**. Das sind Minuten bis Stunden, nicht Millisekunden.
 `MaskingSession` als lokale Variable einer HTTP-Anfrage trägt das nicht.
 
-Vier Festlegungen für den kommenden `MaskingSessionStore`:
+Vier Festlegungen, umgesetzt in `MaskingSessionStore` (Juli 2026):
 
 1. **Nur im Speicher, niemals persistiert.** Die Zuordnung ist Klartext-PII.
    Sie auf Platte zu schreiben machte ausgerechnet die Komponente, die PII vom
@@ -533,5 +533,5 @@ Reihenfolge:
 | Identität festgestellt | `PrincipalResolver` | **fertig** — Default ignoriert Behauptungen |
 | Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Stufen-Variante offen |
 | Abschluss-Ereignis | `CompletionEvent` | **fertig** |
-| Klammer über den Agent Loop | `MaskingSessionStore` | offen |
+| Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
 | Quarantäne für Eval | `QuarantineSink` | offen |

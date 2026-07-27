@@ -475,6 +475,87 @@ final class ServiceIdentityAndCacheTests: XCTestCase {
     }
 }
 
+// MARK: - Geparkte Rueckuebersetzung
+
+final class ParkedSessionTests: XCTestCase {
+
+    private func makePipeline(sessions: MaskingSessionStore?) -> GatewayPipeline {
+        var policy = GatewayPolicy.standard
+        policy.stageBudgetMilliseconds = 10_000
+        return GatewayPipeline(
+            pii: PIIGate(policy: .gatewayDefault, baseDirectory: nil),
+            policy: policy,
+            sessions: sessions)
+    }
+
+    private func request() -> ChatRequest {
+        ChatRequest(model: "m", messages: [
+            ChatMessage(role: .user, content: "Bitte an Frau Anna Schmidt senden."),
+        ])
+    }
+
+    func testPipelineParksTheSessionSoItSurvivesTheCall() async {
+        let store = MaskingSessionStore()
+        let pipeline = makePipeline(sessions: store)
+        let principal = Principal(subject: "u1", tenant: "acme")
+
+        let outcome = await pipeline.process(request(), principal: principal)
+
+        // Genau der Punkt: die Zuordnung ist nach dem Aufruf noch erreichbar.
+        let parked = await pipeline.session(correlationID: outcome.decision.correlationID,
+                                            partition: principal.cachePartition)
+        XCTAssertEqual(parked?.unmask("[Person-1]"), "Anna Schmidt")
+    }
+
+    func testForeignPartitionCannotReachTheParkedSession() async {
+        let store = MaskingSessionStore()
+        let pipeline = makePipeline(sessions: store)
+        let outcome = await pipeline.process(
+            request(), principal: Principal(subject: "u1", tenant: "acme"))
+
+        let stolen = await pipeline.session(correlationID: outcome.decision.correlationID,
+                                            partition: Principal(subject: "x", tenant: "fremd-ag")
+                                                .cachePartition)
+        XCTAssertNil(stolen)
+    }
+
+    func testWithoutAStoreNothingIsParkedAndNothingBreaks() async {
+        let pipeline = makePipeline(sessions: nil)
+        let outcome = await pipeline.process(request(), principal: .anonymous)
+
+        // Der Proxy-Betrieb braucht keinen Speicher: die Session steht im
+        // Ergebnis, das Nachschlagen liefert schlicht nichts.
+        XCTAssertEqual(outcome.session.unmask("[Person-1]"), "Anna Schmidt")
+        let parked = await pipeline.session(correlationID: outcome.decision.correlationID,
+                                            partition: Principal.anonymous.cachePartition)
+        XCTAssertNil(parked)
+    }
+
+    func testServiceReleasesTheSessionOnceTheAnswerIsOut() async {
+        // Im Proxy-Betrieb schliesst die Klammer sofort — die Frist ist der
+        // Notnagel, nicht der Plan.
+        let store = MaskingSessionStore()
+        let service = GatewayService(
+            configuration: GatewayConfiguration(),
+            pipeline: makePipeline(sessions: store),
+            downstream: FakeDownstream(onSend: { _ in
+                ChatResponse(model: "m", content: "Notiert fuer [Person-1].") }))
+
+        let body: [String: Any] = ["model": "m", "messages": [
+            ["role": "user", "content": "Bitte an Frau Anna Schmidt senden."],
+        ]]
+        let responder = RecordingResponder()
+        await service.handle(
+            HTTPRequest(method: "POST", path: "/v1/chat/completions", headers: [:],
+                        body: try! JSONSerialization.data(withJSONObject: body)),
+            responder)
+
+        XCTAssertTrue(responder.bodyText.contains("Anna Schmidt"))
+        let remaining = await store.count()
+        XCTAssertEqual(remaining, 0, "nach der Antwort darf nichts liegen bleiben")
+    }
+}
+
 // MARK: - Fehler-Ereignisse je Dialekt
 
 final class StreamErrorEncodingTests: XCTestCase {

@@ -188,6 +188,7 @@ public final class GatewayService: @unchecked Sendable {
             emitCompletion(handoff, model: cached.model.isEmpty ? forward.model : cached.model,
                            usage: cached.usage, since: hitStart,
                            streamed: forward.stream, status: 200, cacheHit: true)
+            await closeSession(handoff)
             return
         }
 
@@ -238,6 +239,15 @@ public final class GatewayService: @unchecked Sendable {
             emitCompletion(handoff, model: forward.model, usage: nil,
                            since: upstreamStart, streamed: forward.stream, status: 502)
         }
+        // Im Proxy-Betrieb schliesst die Klammer hier: die Antwort ist raus
+        // (oder gescheitert), die Zuordnung wird nicht mehr gebraucht. Ohne
+        // konfigurierten Speicher ist das ein Leerlauf.
+        await closeSession(handoff)
+    }
+
+    private func closeSession(_ handoff: GatewayHandoff) async {
+        await pipeline.closeSession(correlationID: handoff.correlationID,
+                                    partition: handoff.principal.cachePartition)
     }
 
     /// Was der Rueckweg ueber sich selbst weiss.

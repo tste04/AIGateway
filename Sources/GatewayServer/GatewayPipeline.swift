@@ -59,6 +59,11 @@ public actor GatewayPipeline {
     private let policy: GatewayPolicy
     private let cache: SemanticCache?
     private let embedder: Embedder?
+    /// Optionaler Ablageort fuer die Rueckuebersetzung. Ohne ihn traegt der
+    /// Aufrufer die Session selbst — das reicht, solange die Antwort im selben
+    /// Aufruf zurueckkommt. Wer sie ueber einen Agent Loop oder eine
+    /// menschliche Freigabe hinweg braucht, konfiguriert einen Speicher.
+    private let sessions: MaskingSessionStore?
     /// Zustand des Embedder-Sicherungsschalters. Liegt hier, weil er ueber
     /// Anfragen hinweg gelten muss — und die Pipeline ist der Actor, der sie
     /// alle sieht.
@@ -69,12 +74,14 @@ public actor GatewayPipeline {
                 pii: PIIGate? = nil,
                 policy: GatewayPolicy = .standard,
                 cache: SemanticCache? = nil,
-                embedder: Embedder? = nil) {
+                embedder: Embedder? = nil,
+                sessions: MaskingSessionStore? = nil) {
         self.injection = injection
         self.pii = pii
         self.policy = policy
         self.cache = cache
         self.embedder = embedder
+        self.sessions = sessions
     }
 
     /// Vertrauensstufe aus der Nachrichtenrolle.
@@ -255,13 +262,47 @@ public actor GatewayPipeline {
             correlationID: correlationID, disposition: disposition, riskScore: worstRisk,
             findings: findings, content: forwarded.scannableText, timings: timings,
             degraded: Self.isDegraded(timings))
+
+        // Die Zuordnung wird zusaetzlich geparkt, wenn ein Speicher da ist.
+        // `Outcome.session` bleibt trotzdem gefuellt: der Proxy-Pfad braucht
+        // sie sofort und soll dafuer nicht erst nachschlagen muessen.
+        let session = MaskingSession(mapping: mapping)
+        if let sessions {
+            await sessions.park(session, correlationID: correlationID,
+                                partition: principal.cachePartition)
+        }
+
         return Outcome(decision: decision,
                        audit: AuditEvent(decision: decision, principal: principal,
                                          model: request.model),
                        forward: forwarded,
-                       session: MaskingSession(mapping: mapping),
+                       session: session,
                        cached: cached,
                        cacheTicket: ticket)
+    }
+
+    // MARK: - Geparkte Zuordnungen
+
+    /// Holt die geparkte Rueckuebersetzung eines Vorgangs.
+    ///
+    /// `nil` heisst: unbekannt, abgelaufen oder fremde Partition. Der Aufrufer
+    /// nimmt dann `MaskingSession.empty` — die Antwort geht mit Platzhaltern
+    /// hinaus, statt dass geraten wird.
+    public func session(correlationID: String, partition: String) async -> MaskingSession? {
+        await sessions?.session(correlationID: correlationID, partition: partition)
+    }
+
+    /// Verlaengert auf die lange Frist, weil der Vorgang in die menschliche
+    /// Freigabe geht.
+    @discardableResult
+    public func extendSession(correlationID: String, partition: String) async -> Bool {
+        await sessions?.extend(correlationID: correlationID, partition: partition) ?? false
+    }
+
+    /// Gibt die Zuordnung frei. Der Antwortpfad ruft das, sobald die Antwort
+    /// draussen ist — die Frist ist der Notnagel, nicht der Plan.
+    public func closeSession(correlationID: String, partition: String) async {
+        await sessions?.close(correlationID: correlationID, partition: partition)
     }
 
     /// Vektor zur Anfrage, oder `nil`.

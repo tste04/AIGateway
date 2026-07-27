@@ -87,6 +87,12 @@ PRs violating these will be declined regardless of usefulness.
   stage: its only legitimate failure is a miss. It is exempt from the
   fail-closed budget and must not mark a decision `degraded` — that word is
   reserved for an incomplete *security* verdict.
+- **Masking sessions are never written to disk and never guessed.**
+  `MaskingSessionStore` holds cleartext mappings, so it stays in memory; a
+  lookup that finds nothing returns `nil` and the caller falls back to
+  `MaskingSession.empty`, which sends the answer out with placeholders
+  standing. Resolving from the global vault instead would be the
+  multi-tenant-unsafe return path the session type exists to avoid.
 
 ## Conventions
 

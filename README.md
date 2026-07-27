@@ -39,6 +39,9 @@ Output Guardrails sind nicht Teil davon.
   maskierte Antwort.
 - **Identitäts-Naht** (`PrincipalResolver`): Identitäts-Header werden per
   Default ignoriert statt geglaubt; wer Mandanten trennt, belegt die Behauptung.
+- **Maskierungs-Klammer über längere Vorgänge** (`MaskingSessionStore`): hält
+  die Rückübersetzung für Agent Loop und menschliche Freigabe vor — nur im
+  Speicher, partitionsgebunden, mit kurzer Default- und langer Freigabe-Frist.
 - **HTTP-/SSE-Server** mit Provider-Adaptern für OpenAI, Anthropic und Ollama,
   eingehend wie ausgehend.
 
