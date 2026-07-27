@@ -64,6 +64,10 @@ public actor GatewayPipeline {
     /// Aufruf zurueckkommt. Wer sie ueber einen Agent Loop oder eine
     /// menschliche Freigabe hinweg braucht, konfiguriert einen Speicher.
     private let sessions: MaskingSessionStore?
+    /// Optionaler Beweismittelschrank fuer den Feedback Loop. Ohne ihn wird
+    /// nichts aufbewahrt — das Audit bleibt die einzige Spur, und die ist
+    /// payload-frei.
+    private let quarantine: Quarantine?
     /// Zustand des Embedder-Sicherungsschalters. Liegt hier, weil er ueber
     /// Anfragen hinweg gelten muss — und die Pipeline ist der Actor, der sie
     /// alle sieht.
@@ -75,13 +79,15 @@ public actor GatewayPipeline {
                 policy: GatewayPolicy = .standard,
                 cache: SemanticCache? = nil,
                 embedder: Embedder? = nil,
-                sessions: MaskingSessionStore? = nil) {
+                sessions: MaskingSessionStore? = nil,
+                quarantine: Quarantine? = nil) {
         self.injection = injection
         self.pii = pii
         self.policy = policy
         self.cache = cache
         self.embedder = embedder
         self.sessions = sessions
+        self.quarantine = quarantine
     }
 
     /// Vertrauensstufe aus der Nachrichtenrolle.
@@ -121,17 +127,17 @@ public actor GatewayPipeline {
             let finding = Finding(
                 ruleID: Self.ruleOversizedInput, category: .anomaly, severity: .high, weight: 1.0,
                 message: "request exceeds maxInputBytes (\(payloadBytes) > \(policy.maxInputBytes))")
-            return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                           findings: [finding], risk: 1.0,
-                           content: "", timings: [], bytes: payloadBytes)
+            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                 findings: [finding], risk: 1.0,
+                                 content: "", timings: [], bytes: payloadBytes)
         }
         if request.messages.count > policy.maxMessages {
             let finding = Finding(
                 ruleID: Self.ruleTooManyMessages, category: .anomaly, severity: .high, weight: 1.0,
                 message: "request exceeds maxMessages (\(request.messages.count) > \(policy.maxMessages))")
-            return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                           findings: [finding], risk: 1.0,
-                           content: "", timings: [], bytes: payloadBytes)
+            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                 findings: [finding], risk: 1.0,
+                                 content: "", timings: [], bytes: payloadBytes)
         }
 
         // Stufe 2 — Injection, je Nachricht mit rollenabhaengiger Provenienz.
@@ -156,15 +162,15 @@ public actor GatewayPipeline {
         // Bei `.block` wandert das ORIGINAL in die Entscheidung — die Quarantaene
         // soll den Angriff so sehen, wie er ankam, nicht bereinigt.
         if worstRisk >= policy.blockThreshold {
-            return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                           findings: findings, risk: worstRisk,
-                           content: request.scannableText, timings: timings, bytes: payloadBytes)
+            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                 findings: findings, risk: worstRisk,
+                                 content: request.scannableText, timings: timings, bytes: payloadBytes)
         }
         if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
             findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-            return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                           findings: findings, risk: 1.0,
-                           content: request.scannableText, timings: timings, bytes: payloadBytes)
+            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                 findings: findings, risk: 1.0,
+                                 content: request.scannableText, timings: timings, bytes: payloadBytes)
         }
 
         // Stufe 3 — PII maskieren. MUSS vor der Cache-Schluessel-Bildung liegen
@@ -207,16 +213,16 @@ public actor GatewayPipeline {
 
             if worstRisk >= policy.blockThreshold {
                 // Praktisch nur der Dichte-Waechter auf `abstain`.
-                return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                               findings: findings, risk: worstRisk,
-                               content: request.scannableText, timings: timings,
+                return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                     findings: findings, risk: worstRisk,
+                                     content: request.scannableText, timings: timings,
                                bytes: payloadBytes)
             }
             if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
                 findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-                return blocked(correlationID: correlationID, principal: principal, model: request.model,
-                               findings: findings, risk: 1.0,
-                               content: request.scannableText, timings: timings,
+                return await blocked(correlationID: correlationID, principal: principal, model: request.model,
+                                     findings: findings, risk: 1.0,
+                                     content: request.scannableText, timings: timings,
                                bytes: payloadBytes)
             }
         }
@@ -262,6 +268,12 @@ public actor GatewayPipeline {
             correlationID: correlationID, disposition: disposition, riskScore: worstRisk,
             findings: findings, content: forwarded.scannableText, timings: timings,
             degraded: Self.isDegraded(timings))
+
+        // Beinahe-Treffer: knapp unter der Schwelle durchgelassen. Genau dort
+        // sitzen die Fehlalarme und die knapp durchgerutschten Angriffe —
+        // wertvoller fuer das Nachschaerfen als die klaren Blocks.
+        await quarantineIfCollected(decision, principal: principal, model: request.model,
+                                    rawContent: request.scannableText)
 
         // Die Zuordnung wird zusaetzlich geparkt, wenn ein Speicher da ist.
         // `Outcome.session` bleibt trotzdem gefuellt: der Proxy-Pfad braucht
@@ -361,15 +373,69 @@ public actor GatewayPipeline {
 
     private func blocked(correlationID: String, principal: Principal, model: String,
                          findings: [Finding], risk: Double, content: String,
-                         timings: [StageTiming], bytes: Int) -> Outcome {
+                         timings: [StageTiming], bytes: Int) async -> Outcome {
         let decision = GatewayDecision(
             correlationID: correlationID, disposition: .block, riskScore: risk,
             findings: findings, content: content, timings: timings,
             degraded: Self.isDegraded(timings))
+        await quarantineIfCollected(decision, principal: principal, model: model,
+                                    rawContent: content)
         return Outcome(decision: decision,
                        audit: AuditEvent(decision: decision, principal: principal, model: model),
                        forward: nil,
                        session: .empty)
+    }
+
+    // MARK: - Quarantaene
+
+    /// Legt den Vorfall ab, wenn die Policy ihn einsammelt.
+    ///
+    /// `rawContent` ist immer der URSPRUNGSTEXT, auch auf dem Allow-Pfad: die
+    /// Stufe entscheidet, was davon aufbewahrt wird, nicht der Zufall, an
+    /// welcher Stelle der Pipeline der Aufruf sitzt.
+    private func quarantineIfCollected(_ decision: GatewayDecision,
+                                       principal: Principal,
+                                       model: String,
+                                       rawContent: String) async {
+        guard let quarantine,
+              quarantine.policy.collects(disposition: decision.disposition,
+                                         riskScore: decision.riskScore,
+                                         blockThreshold: policy.blockThreshold)
+        else { return }
+
+        var detail = quarantine.policy.detail
+        var content: String?
+        switch detail {
+        case .counts:
+            content = nil
+        case .raw:
+            content = rawContent
+        case .masked:
+            // Ohne PII-Stufe ist nicht maskierbar. Dann wird ABGESTUFT statt
+            // roh abgelegt — die hoehere Stufe war angefordert, nicht erlaubt.
+            if let pii {
+                content = await pii.mask(rawContent).maskedContent
+            } else {
+                detail = .counts
+                content = nil
+            }
+        }
+
+        // Kategorien entdoppeln, Reihenfolge stabil halten — wie im Audit.
+        var seen = Set<FindingCategory>()
+        let now = Date()
+        await quarantine.sink.store(QuarantineSample(
+            correlationID: decision.correlationID,
+            timestamp: now,
+            principal: principal,
+            model: model,
+            disposition: decision.disposition,
+            riskScore: decision.riskScore,
+            ruleIDs: decision.findings.map(\.ruleID),
+            categories: decision.findings.map(\.category).filter { seen.insert($0).inserted },
+            detail: detail,
+            content: content,
+            expiresAt: now.addingTimeInterval(quarantine.policy.retention)))
     }
 
     /// Misst eine abgeschlossene Stufe gegen ihr Budget.

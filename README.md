@@ -42,6 +42,9 @@ Output Guardrails sind nicht Teil davon.
 - **Maskierungs-Klammer über längere Vorgänge** (`MaskingSessionStore`): hält
   die Rückübersetzung für Agent Loop und menschliche Freigabe vor — nur im
   Speicher, partitionsgebunden, mit kurzer Default- und langer Freigabe-Frist.
+- **Quarantäne für Eval-Daten** (`QuarantineSink`): bewahrt Blocks und
+  Beinahe-Treffer befristet auf, damit sich Regeln nachschärfen lassen, ohne
+  Prompts ins Audit zu schreiben. Default aus, drei Stufen.
 - **HTTP-/SSE-Server** mit Provider-Adaptern für OpenAI, Anthropic und Ollama,
   eingehend wie ausgehend.
 

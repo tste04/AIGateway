@@ -87,6 +87,12 @@ PRs violating these will be declined regardless of usefulness.
   stage: its only legitimate failure is a miss. It is exempt from the
   fail-closed budget and must not mark a decision `degraded` — that word is
   reserved for an incomplete *security* verdict.
+- **Payload leaves the process through the quarantine or not at all.**
+  `QuarantineSink` is the one path allowed to retain content, and it is off by
+  default with three levels and a hard retention. Do not widen it silently: if
+  `masked` is asked for and no PII stage is configured, the entry drops to
+  `counts` rather than storing raw text, and `QuarantineSample.detail` always
+  states what was actually kept.
 - **Masking sessions are never written to disk and never guessed.**
   `MaskingSessionStore` holds cleartext mappings, so it stays in memory; a
   lookup that finds nothing returns `nil` and the caller falls back to

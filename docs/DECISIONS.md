@@ -485,11 +485,35 @@ namensabhängig — „ignore all previous instructions", Homoglyphen und
 Buchstaben-Sperrung überstehen die Maskierung unbeschadet. Nur wer die
 PII-Regeln selbst tunen will, braucht `raw`.
 
-Gesammelt werden `.block`-Entscheidungen **und eine Stichprobe knapp unter der
-Schwelle** — dort sitzen die Fehlalarme und die knapp durchgerutschten
-Angriffe, also die wertvollsten Beispiele. Dazu eine harte Aufbewahrungsfrist
-in Tagen, die ein Aufräumlauf durchsetzt. Der Haken dafür existiert bereits:
-`GatewayDecision.content` trägt bei `.block` den Originalinhalt.
+Gesammelt werden `.block`-Entscheidungen **und die Beinahe-Treffer knapp unter
+der Schwelle** — dort sitzen die Fehlalarme und die knapp durchgerutschten
+Angriffe, also die wertvollsten Beispiele. Dazu eine harte Aufbewahrungsfrist,
+die eine Senke durchsetzen **muss**.
+
+#### Umsetzung (Juli 2026)
+
+Drei Punkte kamen beim Bauen dazu:
+
+1. **Das Fenster ist die Auswahl, nicht der Zufall.** Ursprünglich war von
+   einer „Stichprobe" die Rede. Umgesetzt ist ein Fenster (`nearMissBand`,
+   Default 0.15 unter der Schwelle) ohne Zufallsziehung: eine zufällig
+   ziehende Auswahl machte Vorfälle unreproduzierbar und brächte eine
+   Nichtdeterminismus-Quelle in eine Sicherheitskomponente. Wer nur Blocks
+   will, setzt das Fenster auf 0.
+2. **Nicht maskierbar heißt abstufen, nicht roh ablegen.** Ist `masked`
+   angefordert, aber keine PII-Stufe konfiguriert, fällt der Eintrag auf
+   `counts` zurück statt den Rohtext zu behalten. `QuarantineSample.detail`
+   trägt deshalb, was **tatsächlich** abgelegt wurde — nicht, was die Policy
+   erlaubt hätte.
+3. **Der Ursprungstext geht in die Quarantäne, auf beiden Pfaden.** Auf dem
+   Allow-Pfad wäre der Inhalt der Entscheidung bereits maskiert; die Stufe
+   soll aber entscheiden, was aufbewahrt wird, und nicht der Zufall, an
+   welcher Stelle der Pipeline der Aufruf sitzt.
+
+`MemoryQuarantineSink` liegt als Referenz bei und setzt die Frist wirklich
+durch — abgelaufene Vorfälle sind nicht mehr lesbar. Wer die Beispiele über
+einen Neustart hinaus braucht, schreibt eine eigene Senke und trifft damit
+ausdrücklich die Entscheidung, Nutzinhalt dauerhaft abzulegen.
 
 ### Malware braucht erst eine Angriffsfläche (Vorbedingung für Rang 7)
 
@@ -534,4 +558,4 @@ Reihenfolge:
 | Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Stufen-Variante offen |
 | Abschluss-Ereignis | `CompletionEvent` | **fertig** |
 | Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
-| Quarantäne für Eval | `QuarantineSink` | offen |
+| Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Senke ist Betreibersache |
