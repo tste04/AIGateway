@@ -66,31 +66,80 @@ public struct CacheKey: Hashable, Sendable {
 
 // MARK: - Entitaeten
 
-/// Zahlen und Platzhalter einer Anfrage — der Waechter gegen semantische
-/// Beinahe-Treffer.
+/// Zahlen, Platzhalter und Eigennamen einer Anfrage — der Waechter gegen
+/// semantische Beinahe-Treffer.
 public struct EntitySignature: Hashable, Sendable {
     public let terms: Set<String>
 
     public init(terms: Set<String>) { self.terms = terms }
 
-    /// Zieht alles heraus, was eine Ziffer enthaelt, sowie die gesetzten
-    /// Platzhalter.
+    /// Sammelt drei Arten von Begriffen:
     ///
-    /// Nach der Maskierung sind Eigennamen bereits Platzhalter — `[Person-1]`
-    /// gegen `[Person-2]` ist damit ein Unterschied, den der Waechter sieht,
-    /// ohne dass er Klarnamen kennen muesste.
+    ///   1. gesetzte Platzhalter (`[Person-1]`),
+    ///   2. alles mit einer Ziffer (Q3, 2026, 42),
+    ///   3. grossgeschriebene Woerter, abzueglich Funktionswoerter.
+    ///
+    /// Punkt 3 kam nach: mit Ziffern allein hatten „Umsatz Nord" und
+    /// „Umsatz Sued" dieselbe Signatur, lagen im Einbettungsraum dicht
+    /// beieinander und haetten sich gegenseitig beantwortet — genau der
+    /// Fehler, gegen den der Waechter steht. DECISIONS verlangt ausdruecklich
+    /// auch Eigennamen.
+    ///
+    /// Im Deutschen ist jedes Substantiv grossgeschrieben, die Signatur ist
+    /// damit ungefaehr die Menge der Inhaltswoerter. Das macht den Waechter
+    /// streng: verschiedene Substantive heissen kein Treffer. Diese Richtung
+    /// ist die richtige — ein verpasster Treffer kostet einen Modellaufruf,
+    /// ein falscher liefert eine falsche Antwort. Die Umformulierungen, die
+    /// die semantische Stufe fangen soll (Wortstellung, Hoeflichkeitsfloskeln,
+    /// Fuellwoerter), lassen die Inhaltswoerter ohnehin stehen.
     public static func of(_ text: String) -> EntitySignature {
         let range = NSRange(text.startIndex..., in: text)
         var terms = Set<String>()
         for match in entityRegex.matches(in: text, range: range) {
             guard let bounds = Range(match.range, in: text) else { continue }
-            terms.insert(String(text[bounds]).lowercased())
+            let term = String(text[bounds]).lowercased()
+            guard !functionWords.contains(term) else { continue }
+            terms.insert(term)
         }
         return EntitySignature(terms: terms)
     }
 
+    /// Reihenfolge zaehlt: die Ziffern-Alternative steht vor der
+    /// Grossschreibungs-Alternative, sonst faenge letztere „Q" aus „Q3".
     private static let entityRegex = try! NSRegularExpression(
-        pattern: #"\[[A-Za-z]+-\d+\]|[\p{L}]*\d[\p{L}\d]*"#)
+        pattern: #"\[[A-Za-z]+-\d+\]|[\p{L}]*\d[\p{L}\d]*|\p{Lu}[\p{L}]+"#)
+
+    /// Woerter, die nur wegen des Satzanfangs grossgeschrieben sind und keine
+    /// Entitaet bezeichnen. Ohne sie unterschieden sich „Was ist Routing?" und
+    /// „Erklaere Routing" in der Signatur, und die semantische Stufe liefe leer.
+    ///
+    /// Wie beim Regelkatalog: Deutsch und Englisch: andere Sprachen brauchen
+    /// eigene Listen.
+    static let functionWords: Set<String> = [
+        // Deutsch — Fragewoerter, Aufforderungen, Artikel, Pronomen
+        "was", "wie", "warum", "wieso", "weshalb", "wer", "wen", "wem", "wann",
+        "wo", "woher", "wohin", "welche", "welcher", "welches", "welchen", "welchem",
+        "bitte", "erklaere", "erkläre", "erklaer", "erklär", "nenne", "nenn",
+        "zeige", "zeig", "gib", "sage", "sag", "schreibe", "schreib", "fasse",
+        "fass", "liste", "beschreibe", "beschreib", "vergleiche", "vergleich",
+        "kann", "kannst", "koennen", "können", "koennte", "könnte", "soll",
+        "sollst", "ist", "sind", "war", "waren", "hat", "haben", "gibt",
+        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer",
+        "eines", "einem", "einen", "und", "oder", "aber", "auch", "nicht",
+        "kein", "keine", "ich", "du", "er", "sie", "es", "wir", "ihr", "mir",
+        "mich", "dir", "dich", "uns", "euch", "man",
+        "in", "an", "auf", "fuer", "für", "mit", "von", "zu", "bei", "aus",
+        "ueber", "über", "unter", "nach", "vor", "ohne", "durch",
+        // Englisch
+        "what", "how", "why", "who", "whom", "when", "where", "which",
+        "please", "explain", "tell", "show", "give", "describe", "list",
+        "write", "summarize", "summarise", "compare",
+        "can", "could", "would", "should", "do", "does", "did", "have", "has",
+        "is", "are", "were", "be",
+        "the", "a", "an", "and", "or", "but", "not", "no",
+        "i", "you", "he", "she", "it", "we", "they", "me", "us", "them",
+        "on", "at", "for", "with", "from", "to", "by", "about", "of",
+    ]
 }
 
 // MARK: - Betriebsparameter
@@ -108,17 +157,30 @@ public struct SemanticCachePolicy: Sendable, Equatable {
     /// Oberhalb dieser Temperatur wird nicht gecacht — wer Varianz anfordert,
     /// soll sie bekommen.
     public var maxTemperature: Double
+    /// So viele Embedder-Fehlschlaege in Folge schalten die semantische Stufe
+    /// ab. Der Embedder ist die einzige Netz-Abhaengigkeit im Anfragepfad:
+    /// haengt er, statt zu sterben, zahlt sonst JEDE cachebare Anfrage sein
+    /// Zeitlimit, bevor sie in den Fehltreffer faellt — der Cache macht das
+    /// Gateway dann langsamer statt schneller.
+    public var embedderFailureThreshold: Int
+    /// So lange bleibt die semantische Stufe danach aus. Der exakte Treffer
+    /// laeuft die ganze Zeit weiter — er braucht keinen Embedder.
+    public var embedderCooldown: TimeInterval
 
     public init(enabled: Bool = false,
                 timeToLive: TimeInterval = 3600,
                 maxEntries: Int = 1000,
                 similarityThreshold: Double = 0.95,
-                maxTemperature: Double = 0.3) {
+                maxTemperature: Double = 0.3,
+                embedderFailureThreshold: Int = 3,
+                embedderCooldown: TimeInterval = 30) {
         self.enabled = enabled
         self.timeToLive = timeToLive
         self.maxEntries = maxEntries
         self.similarityThreshold = similarityThreshold
         self.maxTemperature = maxTemperature
+        self.embedderFailureThreshold = embedderFailureThreshold
+        self.embedderCooldown = embedderCooldown
     }
 
     public static let standard = SemanticCachePolicy()
@@ -194,7 +256,10 @@ public actor SemanticCache {
         public let kind: HitKind
     }
 
-    private let policy: SemanticCachePolicy
+    /// `nonisolated`, weil unveraenderlich: die Pipeline liest Schwellen und
+    /// Cachebarkeit ohne Actor-Sprung, und der Actor bleibt fuer die Eintraege
+    /// zustaendig.
+    public nonisolated let policy: SemanticCachePolicy
     private var entries: [CacheKey: Entry] = [:]
     private var clock: UInt64 = 0
 
@@ -202,13 +267,11 @@ public actor SemanticCache {
         self.policy = policy
     }
 
-    public var isEnabled: Bool { policy.enabled }
-
     public func count() -> Int { entries.count }
 
     /// Darf diese Anfrage in den Cache? Prueft gegen die eigene Policy, damit
     /// der Aufrufer sie nicht kennen muss.
-    public func isCacheable(_ request: ChatRequest) -> Bool {
+    public nonisolated func isCacheable(_ request: ChatRequest) -> Bool {
         CacheEligibility.isCacheable(request, policy: policy)
     }
 

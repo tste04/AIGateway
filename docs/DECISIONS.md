@@ -362,6 +362,43 @@ der Umsetzung:
    den Cache aus, ebenso Tool-Nachrichten und Zeitbezüge („heute", „aktuell",
    „latest"). Die Zeitbezugs-Muster decken Deutsch und Englisch ab — wie beim
    Regelkatalog brauchen andere Sprachen eigene.
+5. **Der Entitäten-Wächter erfasst auch großgeschriebene Wörter**, nicht nur
+   Ziffern und Platzhalter. Die erste Fassung ließ „Umsatz Nord" und „Umsatz
+   Süd" mit identischer Signatur durch — im Einbettungsraum praktisch gleich,
+   inhaltlich verschieden. Im Deutschen ist damit ungefähr die Menge der
+   Inhaltswörter im Schlüssel, was den Wächter streng macht. Diese Richtung ist
+   die richtige: ein verpasster Treffer kostet einen Modellaufruf, ein falscher
+   liefert eine falsche Antwort. Funktionswörter (Fragewörter, Artikel,
+   Aufforderungen) sind ausgenommen, sonst unterschieden sich „Was ist
+   Routing?" und „Erkläre Routing" und die semantische Stufe liefe leer.
+6. **Sicherungsschalter am Embedder.** Ein *hängender* Embedder ist schlimmer
+   als gar keiner: stirbt er, kostet jeder Versuch einen abgelehnten
+   Verbindungsaufbau; antwortet er langsam, zahlt sonst jede cachebare Anfrage
+   sein volles Zeitlimit, bevor sie in den Fehltreffer fällt — der Cache macht
+   das Gateway dann langsamer statt schneller. Nach drei Fehlschlägen in Folge
+   bleibt die semantische Stufe 30 Sekunden aus, danach entscheidet ein
+   Probelauf. Der exakte Treffer läuft durchgehend weiter; der Cache verliert
+   Reichweite, nie Funktion.
+
+### Semantic Cache — was bewusst offen bleibt
+
+Der Cache ist tragfähig für den Betrieb hinter Loopback mit lokalem Embedder,
+aber nicht ausgebaut. Vier Punkte sind bekannt und nicht gebaut:
+
+- **Keine Persistenz.** Rein im Speicher; ein Neustart setzt den Kostenhebel
+  auf null. Für die Vertraulichkeit ist das die richtige Wahl (keine maskierten
+  Antworten auf Platte), für den Zweck spürbar.
+- **Verdrängung ist global, nicht je Partition.** Ein lauter Mandant kann die
+  Einträge eines stillen verdrängen — keine Vertraulichkeitsfrage, aber eine
+  Verfügbarkeitskopplung zwischen Mandanten.
+- **Keine Trefferquote.** `CompletionEvent.cacheHit` steht je Anfrage, aber
+  nichts aggregiert sie für die FinOps-Box.
+- **Keine gezielte Invalidierung.** Ändern sich Quelldaten, gibt es keinen Weg,
+  eine Partition oder einen Schlüssel zu verwerfen; nur Ablauf und Verdrängung.
+
+Dazu eine Grenze der zweiten Stufe: die semantische Suche ist ein linearer Lauf
+über die Einträge der Partition. Bei `maxEntries` in der Größenordnung von
+tausend ist das unkritisch; darüber bräuchte es einen Index.
 
 ### Abwärts-Naht: heute Provider, später die nächste Box
 
@@ -483,7 +520,7 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
-| 5 | Semantic Cache | **fertig** — exakt + semantisch, partitioniert |
+| 5 | Semantic Cache | **nutzbar** — exakt + semantisch, partitioniert; Persistenz, Kennzahlen und Invalidierung offen |
 | 6 | DLP-Policy-Semantik | offen |
 | 7 | Malware (ClamAV-Naht) | offen — Anhang-Naht fehlt |
 

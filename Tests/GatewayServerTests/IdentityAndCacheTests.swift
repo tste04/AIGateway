@@ -183,6 +183,30 @@ final class CacheKeyTests: XCTestCase {
         XCTAssertEqual(EntitySignature.of("Bitte fasse zusammen"),
                        EntitySignature.of("Fasse das bitte zusammen"))
     }
+
+    func testSignatureSeparatesProperNounsWithoutDigits() {
+        // Der Fall, den die reine Ziffern-Signatur durchgelassen haette: im
+        // Einbettungsraum praktisch identisch, inhaltlich verschieden.
+        XCTAssertNotEqual(EntitySignature.of("Umsatz Nord"),
+                          EntitySignature.of("Umsatz Sued"))
+        XCTAssertNotEqual(EntitySignature.of("Bericht zu Projekt Alpha"),
+                          EntitySignature.of("Bericht zu Projekt Beta"))
+    }
+
+    func testSignatureSurvivesRephrasing() {
+        // Umformulierungen lassen die Inhaltswoerter stehen — sonst liefe die
+        // semantische Stufe komplett leer.
+        XCTAssertEqual(EntitySignature.of("Was ist Routing?"),
+                       EntitySignature.of("Erklaere Routing"))
+        XCTAssertEqual(EntitySignature.of("Explain the Gateway"),
+                       EntitySignature.of("What is a Gateway?"))
+    }
+
+    func testSignatureKeepsDigitTokensIntact() {
+        // Die Ziffern-Alternative muss vor der Grossschreibung greifen, sonst
+        // bliebe von „Q3" nur „Q" uebrig — und Q3 glich Q4.
+        XCTAssertEqual(EntitySignature.of("Q3").terms, ["q3"])
+    }
 }
 
 // MARK: - Der Cache
@@ -328,6 +352,78 @@ final class SemanticCacheTests: XCTestCase {
                           entities: EntitySignature.of(k.prompt))
         let hit = await cache.lookup(key: k, embedding: nil, entities: EntitySignature.of(k.prompt))
         XCTAssertNil(hit)
+    }
+}
+
+// MARK: - Sicherungsschalter am Embedder
+
+/// Zaehlt Aufrufe und scheitert immer — steht fuer den haengenden Dienst.
+private actor FailingEmbedder: Embedder {
+    private(set) var calls = 0
+
+    func embed(_ text: String) async throws -> [Double] {
+        calls += 1
+        throw GatewayServerError.upstream(status: 0, body: "embedder down")
+    }
+}
+
+final class EmbedderCircuitTests: XCTestCase {
+
+    private func pipeline(threshold: Int, cooldown: TimeInterval,
+                          embedder: Embedder) -> GatewayPipeline {
+        var policy = GatewayPolicy.standard
+        policy.stageBudgetMilliseconds = 10_000
+        return GatewayPipeline(
+            policy: policy,
+            cache: SemanticCache(policy: SemanticCachePolicy(
+                enabled: true,
+                embedderFailureThreshold: threshold,
+                embedderCooldown: cooldown)),
+            embedder: embedder)
+    }
+
+    private func request(_ n: Int) -> ChatRequest {
+        // Jede Anfrage anders, damit jede ein Fehltreffer ist und den Embedder
+        // wirklich zu fragen versucht.
+        ChatRequest(model: "m", messages: [ChatMessage(role: .user, content: "Frage \(n)")])
+    }
+
+    func testCircuitOpensAfterConsecutiveFailures() async {
+        let embedder = FailingEmbedder()
+        let pipe = pipeline(threshold: 2, cooldown: 600, embedder: embedder)
+
+        for n in 0..<5 {
+            _ = await pipe.process(request(n), principal: .anonymous)
+        }
+
+        let calls = await embedder.calls
+        XCTAssertEqual(calls, 2, "nach der Schwelle darf nicht weiter gefragt werden")
+    }
+
+    func testRequestsStillSucceedWhileTheCircuitIsOpen() async {
+        // Der Cache verliert Reichweite, nicht Funktion: die Anfrage laeuft
+        // weiter, nur eben ohne semantische Stufe.
+        let pipe = pipeline(threshold: 1, cooldown: 600, embedder: FailingEmbedder())
+        for n in 0..<3 {
+            let outcome = await pipe.process(request(n), principal: .anonymous)
+            XCTAssertNotNil(outcome.forward)
+            XCTAssertNotEqual(outcome.decision.disposition, .block)
+            XCTAssertFalse(outcome.decision.degraded,
+                           "ein Embedder-Ausfall ist keine unvollstaendige Sicherheitsbewertung")
+        }
+    }
+
+    func testCircuitProbesAgainAfterCooldown() async {
+        // Frist 0: die Sperre ist beim naechsten Versuch schon abgelaufen.
+        let embedder = FailingEmbedder()
+        let pipe = pipeline(threshold: 1, cooldown: 0, embedder: embedder)
+
+        for n in 0..<4 {
+            _ = await pipe.process(request(n), principal: .anonymous)
+        }
+
+        let calls = await embedder.calls
+        XCTAssertEqual(calls, 4, "nach abgelaufener Frist muss wieder gefragt werden")
     }
 }
 

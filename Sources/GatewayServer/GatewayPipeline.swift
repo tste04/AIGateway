@@ -59,6 +59,11 @@ public actor GatewayPipeline {
     private let policy: GatewayPolicy
     private let cache: SemanticCache?
     private let embedder: Embedder?
+    /// Zustand des Embedder-Sicherungsschalters. Liegt hier, weil er ueber
+    /// Anfragen hinweg gelten muss — und die Pipeline ist der Actor, der sie
+    /// alle sieht.
+    private var embedderFailures = 0
+    private var embedderOpenUntil: Date?
 
     public init(injection: InjectionScanner = InjectionScanner(),
                 pii: PIIGate? = nil,
@@ -228,13 +233,13 @@ public actor GatewayPipeline {
         //     die semantische Stufe, die exakte bleibt.
         var cached: ChatResponse?
         var ticket: CacheTicket?
-        if let cache, await cache.isCacheable(forwarded) {
+        if let cache, cache.isCacheable(forwarded) {
             let cacheStart = DispatchTime.now().uptimeNanoseconds
             let key = CacheKey(partition: principal.cachePartition, request: forwarded)
             let entities = EntitySignature.of(key.prompt)
             // Einbettung ausserhalb des Cache-Actors holen: Netz-I/O gehoert
             // nicht hinter eine Sperre, die alle Treffer serialisieren wuerde.
-            let vector = await embedding(for: key.prompt)
+            let vector = await embedding(for: key.prompt, policy: cache.policy)
             if let hit = await cache.lookup(key: key, embedding: vector, entities: entities) {
                 cached = hit.response
             } else {
@@ -259,12 +264,38 @@ public actor GatewayPipeline {
                        cacheTicket: ticket)
     }
 
-    /// Vektor zur Anfrage, oder `nil`. Schluckt jeden Fehler: der Embedder ist
-    /// die einzige Netz-Abhaengigkeit im Anfragepfad, und sein Ausfall darf
-    /// hoechstens einen Fehltreffer kosten.
-    private func embedding(for prompt: String) async -> [Double]? {
+    /// Vektor zur Anfrage, oder `nil`.
+    ///
+    /// Schluckt jeden Fehler — der Embedder ist die einzige Netz-Abhaengigkeit
+    /// im Anfragepfad, und sein Ausfall darf hoechstens einen Fehltreffer
+    /// kosten. Dazu ein Sicherungsschalter: **ein haengender Embedder ist
+    /// schlimmer als gar keiner.** Stirbt er, kostet jeder Versuch nur einen
+    /// abgelehnten Verbindungsaufbau; antwortet er dagegen langsam, zahlt sonst
+    /// jede cachebare Anfrage sein volles Zeitlimit, bevor sie in den
+    /// Fehltreffer faellt. Nach `embedderFailureThreshold` Fehlschlaegen in
+    /// Folge bleibt die semantische Stufe deshalb fuer `embedderCooldown` aus.
+    ///
+    /// Der exakte Treffer laeuft die ganze Zeit weiter; er braucht keinen
+    /// Vektor. Der Cache verliert also Reichweite, nie Funktion.
+    private func embedding(for prompt: String, policy cachePolicy: SemanticCachePolicy) async -> [Double]? {
         guard let embedder else { return nil }
-        return try? await embedder.embed(prompt)
+        if let openUntil = embedderOpenUntil {
+            guard Date() >= openUntil else { return nil }
+            // Frist abgelaufen: EIN Probelauf entscheidet, ob wieder gefragt wird.
+            embedderOpenUntil = nil
+        }
+        do {
+            let vector = try await embedder.embed(prompt)
+            embedderFailures = 0
+            return vector
+        } catch {
+            embedderFailures += 1
+            if embedderFailures >= cachePolicy.embedderFailureThreshold {
+                embedderOpenUntil = Date().addingTimeInterval(cachePolicy.embedderCooldown)
+                embedderFailures = 0
+            }
+            return nil
+        }
     }
 
     /// Legt die Antwort zum Ticket ab.
