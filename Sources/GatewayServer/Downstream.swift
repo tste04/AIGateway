@@ -95,46 +95,80 @@ public struct ProviderDownstream: Downstream {
         // `@Sendable`, und was er anfasst, soll hier sichtbar gebunden sein.
         let target = dialect
         let body = try target.encodeRequest(request)
-        let events = EventState(framing: target.framing)
+        let events = Self.collector(for: target)
 
         try await client.stream(
             url: target.upstreamURL(base: baseURL),
             headers: target.authHeaders(apiKey: apiKey),
             body: body
         ) { data in
-            for text in events.consume(data, using: target) { onDelta(text) }
+            for text in events.consume(data) { onDelta(text) }
         }
         return events.reportedUsage()
     }
+
+    /// Der Leser der Provider-Seite: was ein Ereignis bedeutet, weiss der
+    /// Dialekt. `internal`, damit die Chunk-Grenzen-Tests genau den Leser
+    /// fahren, der im Betrieb laeuft.
+    static func collector(for dialect: ProviderAdapter) -> StreamCollector {
+        StreamCollector(framing: dialect.framing) { payload in
+            StreamCollector.Event(
+                delta: dialect.streamDelta(fromEventPayload: payload),
+                usage: dialect.streamUsage(fromEventPayload: payload))
+        }
+    }
 }
 
-/// Ereignis-Zerlegung ueber Chunk-Grenzen hinweg. Der Rueckruf kommt aus einem
-/// Hintergrund-Thread und `EventStreamParser` ist ein mutierender Wert —
-/// deshalb gekapselt und gesperrt.
+/// Ereignis-Zerlegung ueber Chunk-Grenzen hinweg, gemeinsam fuer beide
+/// Abwaerts-Ziele. Der Rueckruf kommt aus einem Hintergrund-Thread und
+/// `EventStreamParser` ist ein mutierender Wert — deshalb gekapselt und
+/// gesperrt.
 ///
-/// `internal` statt `private` aus demselben Grund wie `StageEventState`: was
-/// nur mit einem echten Netz-Strom erreichbar ist, bleibt ungetestet, und
-/// genau in dieser Schicht sassen die Streaming-Fehler.
-final class EventState: @unchecked Sendable {
+/// Was eine Nutzlast BEDEUTET, entscheidet der mitgegebene Leser: die
+/// Provider-Seite fragt ihren Dialekt, die Stufen-Seite liest das kanonische
+/// NDJSON. Vorher waren das zwei fast identische Klassen, die nur in dieser
+/// einen Frage auseinandergingen — und die Streaming-Fehler dieser Schicht
+/// haetten in beiden gefixt werden muessen.
+final class StreamCollector: @unchecked Sendable {
 
-    private var parser: EventStreamParser
-    private var usage: TokenUsage?
-    private let lock = NSLock()
+    /// Was ein Leser aus einer Nutzlast zieht. Ein Ereignis kann Text tragen,
+    /// Verbrauch, einen Fehler — oder nichts von alledem.
+    struct Event {
+        var delta: String?
+        var usage: TokenUsage?
+        var failure: GatewayServerError?
 
-    init(framing: StreamFraming) {
-        self.parser = EventStreamParser(framing: framing)
+        init(delta: String? = nil, usage: TokenUsage? = nil,
+             failure: GatewayServerError? = nil) {
+            self.delta = delta
+            self.usage = usage
+            self.failure = failure
+        }
     }
 
-    /// Ein Ereignis kann Text tragen, Verbrauch, beides oder keines von beiden —
-    /// deshalb wird jede Nutzlast beiden Fragen vorgelegt.
-    func consume(_ data: Data, using dialect: ProviderAdapter) -> [String] {
+    private var parser: EventStreamParser
+    private let read: (String) -> Event
+    private var usage: TokenUsage?
+    private var failure: GatewayServerError?
+    private let lock = NSLock()
+
+    init(framing: StreamFraming, read: @escaping (String) -> Event) {
+        self.parser = EventStreamParser(framing: framing)
+        self.read = read
+    }
+
+    func consume(_ data: Data) -> [String] {
         lock.lock(); defer { lock.unlock() }
         var deltas: [String] = []
         for payload in parser.consume(data) {
-            if let reported = dialect.streamUsage(fromEventPayload: payload) {
+            let event = read(payload)
+            if let reported = event.usage {
                 usage = usage.map { $0.merging(reported) } ?? reported
             }
-            if let text = dialect.streamDelta(fromEventPayload: payload) {
+            if let raised = event.failure {
+                failure = raised
+            }
+            if let text = event.delta, !text.isEmpty {
                 deltas.append(text)
             }
         }
@@ -144,5 +178,14 @@ final class EventState: @unchecked Sendable {
     func reportedUsage() -> TokenUsage? {
         lock.lock(); defer { lock.unlock() }
         return usage
+    }
+
+    /// Ein im Strom gemeldeter Fehler. Wird gemerkt statt geworfen, weil der
+    /// Rueckruf nicht werfen kann — der Aufrufer prueft nach dem Strom-Ende
+    /// und wirft dann; still verschluckt saehe der Abbruch fuer den Client
+    /// wie eine vollstaendige Antwort aus.
+    func pendingFailure() -> GatewayServerError? {
+        lock.lock(); defer { lock.unlock() }
+        return failure
     }
 }

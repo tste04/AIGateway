@@ -119,7 +119,7 @@ final class StageDownstreamTests: XCTestCase {
     // MARK: Strom
 
     func testDeltasAreAssembledAcrossChunkBoundaries() {
-        let state = StageEventState()
+        let state = StageDownstream.collector()
         XCTAssertEqual(state.consume(Data("{\"delta\":\"Hal\"}\n".utf8)), ["Hal"])
         // Eine halbe Zeile darf nichts liefern.
         XCTAssertEqual(state.consume(Data("{\"delta\":\"l".utf8)), [])
@@ -127,7 +127,7 @@ final class StageDownstreamTests: XCTestCase {
     }
 
     func testUsageInTheStreamIsCollected() {
-        let state = StageEventState()
+        let state = StageDownstream.collector()
         _ = state.consume(Data("{\"usage\":{\"prompt_tokens\":7}}\n".utf8))
         _ = state.consume(Data("{\"usage\":{\"completion_tokens\":9}}\n".utf8))
         XCTAssertEqual(state.reportedUsage(), TokenUsage(promptTokens: 7, completionTokens: 9))
@@ -136,14 +136,14 @@ final class StageDownstreamTests: XCTestCase {
     func testAnErrorInTheStreamIsRememberedNotSwallowed() {
         // Still verschluckt saehe er fuer den Client wie eine vollstaendige
         // Antwort aus.
-        let state = StageEventState()
+        let state = StageDownstream.collector()
         _ = state.consume(Data("{\"error\":\"policy engine down\"}\n".utf8))
         XCTAssertEqual(state.pendingFailure(),
                        GatewayServerError.upstream(status: 502, body: "policy engine down"))
     }
 
     func testGarbageLinesAreSkipped() {
-        let state = StageEventState()
+        let state = StageDownstream.collector()
         XCTAssertEqual(state.consume(Data("nicht json\n{\"delta\":\"ok\"}\n".utf8)), ["ok"])
     }
 }

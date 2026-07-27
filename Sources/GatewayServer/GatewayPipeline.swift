@@ -169,19 +169,10 @@ public actor GatewayPipeline {
             worstRisk = max(worstRisk, malwareRisk)
             timings.append(budgetTiming(malware.stageName, since: malwareStart))
 
-            if worstRisk >= policy.blockThreshold {
-                return await blocked(correlationID: correlationID, principal: principal,
-                                     model: request.model, findings: findings, risk: worstRisk,
-                                     content: request.scannableText, timings: timings,
-                                     bytes: payloadBytes)
-            }
-            if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
-                findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-                return await blocked(correlationID: correlationID, principal: principal,
-                                     model: request.model, findings: findings, risk: 1.0,
-                                     content: request.scannableText, timings: timings,
-                                     bytes: payloadBytes)
-            }
+            if let stop = await verdictAfterStage(
+                correlationID: correlationID, principal: principal, model: request.model,
+                findings: &findings, risk: worstRisk, content: request.scannableText,
+                timings: timings, bytes: payloadBytes) { return stop }
         }
 
         // Stufe 4 — Injection, je Nachricht mit rollenabhaengiger Provenienz.
@@ -205,17 +196,10 @@ public actor GatewayPipeline {
 
         // Bei `.block` wandert das ORIGINAL in die Entscheidung — die Quarantaene
         // soll den Angriff so sehen, wie er ankam, nicht bereinigt.
-        if worstRisk >= policy.blockThreshold {
-            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
-                                 findings: findings, risk: worstRisk,
-                                 content: request.scannableText, timings: timings, bytes: payloadBytes)
-        }
-        if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
-            findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-            return await blocked(correlationID: correlationID, principal: principal, model: request.model,
-                                 findings: findings, risk: 1.0,
-                                 content: request.scannableText, timings: timings, bytes: payloadBytes)
-        }
+        if let stop = await verdictAfterStage(
+            correlationID: correlationID, principal: principal, model: request.model,
+            findings: &findings, risk: worstRisk, content: request.scannableText,
+            timings: timings, bytes: payloadBytes) { return stop }
 
         // Stufe 3 — PII maskieren. MUSS vor der Cache-Schluessel-Bildung liegen
         // (siehe DECISIONS): kein Klardatum im Cache-Index, und maskierte
@@ -255,20 +239,11 @@ public actor GatewayPipeline {
             worstRisk = max(worstRisk, piiRisk)
             timings.append(budgetTiming(pii.stageName, since: piiStart))
 
-            if worstRisk >= policy.blockThreshold {
-                // Praktisch nur der Dichte-Waechter auf `abstain`.
-                return await blocked(correlationID: correlationID, principal: principal, model: request.model,
-                                     findings: findings, risk: worstRisk,
-                                     content: request.scannableText, timings: timings,
-                               bytes: payloadBytes)
-            }
-            if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
-                findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-                return await blocked(correlationID: correlationID, principal: principal, model: request.model,
-                                     findings: findings, risk: 1.0,
-                                     content: request.scannableText, timings: timings,
-                               bytes: payloadBytes)
-            }
+            // Ein Block hier ist praktisch nur der Dichte-Waechter auf `abstain`.
+            if let stop = await verdictAfterStage(
+                correlationID: correlationID, principal: principal, model: request.model,
+                findings: &findings, risk: worstRisk, content: request.scannableText,
+                timings: timings, bytes: payloadBytes) { return stop }
         }
 
         // Stufe 6 — DLP. NACH der Maskierung: die Redaktion ist einweg, und was
@@ -289,19 +264,10 @@ public actor GatewayPipeline {
             worstRisk = max(worstRisk, dlpRisk)
             timings.append(budgetTiming(dlp.stageName, since: dlpStart))
 
-            if worstRisk >= policy.blockThreshold {
-                return await blocked(correlationID: correlationID, principal: principal,
-                                     model: request.model, findings: findings, risk: worstRisk,
-                                     content: request.scannableText, timings: timings,
-                                     bytes: payloadBytes)
-            }
-            if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
-                findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
-                return await blocked(correlationID: correlationID, principal: principal,
-                                     model: request.model, findings: findings, risk: 1.0,
-                                     content: request.scannableText, timings: timings,
-                                     bytes: payloadBytes)
-            }
+            if let stop = await verdictAfterStage(
+                correlationID: correlationID, principal: principal, model: request.model,
+                findings: &findings, risk: worstRisk, content: request.scannableText,
+                timings: timings, bytes: payloadBytes) { return stop }
         }
 
         // Stufe 5 — Semantic-Cache-Lookup. HIER und nirgends sonst: nach der
@@ -466,6 +432,32 @@ public actor GatewayPipeline {
     public static let ruleTooManyMessages: RuleID = "GW-003"
 
     // MARK: - Hilfen
+
+    /// Gemeinsamer Abschluss jeder Stufe: erst die Risiko-Schwelle, dann das
+    /// Zeitbudget. Liefert die fertige Block-Entscheidung, wenn nach dieser
+    /// Stufe Schluss ist — sonst `nil`, und der Lauf geht weiter.
+    ///
+    /// Beide Abbruchgruende stehen an EINER Stelle, damit eine neue Stufe sie
+    /// nicht vergessen kann. Vorher stand diese Sequenz viermal wortgleich im
+    /// Ablauf — und eine vergessene fuenfte Abschrift waere eine Stufe, deren
+    /// Befund folgenlos bleibt: still, nicht laut.
+    private func verdictAfterStage(correlationID: String, principal: Principal,
+                                   model: String, findings: inout [Finding],
+                                   risk: Double, content: String,
+                                   timings: [StageTiming], bytes: Int) async -> Outcome? {
+        if risk >= policy.blockThreshold {
+            return await blocked(correlationID: correlationID, principal: principal,
+                                 model: model, findings: findings, risk: risk,
+                                 content: content, timings: timings, bytes: bytes)
+        }
+        if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
+            findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
+            return await blocked(correlationID: correlationID, principal: principal,
+                                 model: model, findings: findings, risk: 1.0,
+                                 content: content, timings: timings, bytes: bytes)
+        }
+        return nil
+    }
 
     private func blocked(correlationID: String, principal: Principal, model: String,
                          findings: [Finding], risk: Double, content: String,

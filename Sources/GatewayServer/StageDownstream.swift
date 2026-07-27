@@ -53,15 +53,29 @@ public struct StageDownstream: Downstream {
     @discardableResult
     public func stream(_ handoff: GatewayHandoff,
                        onDelta: @escaping @Sendable (String) -> Void) async throws -> TokenUsage? {
-        // NDJSON statt SSE: die Gegenstelle ist ein Dienst, kein Browser. Eine
-        // Zeile ist ein JSON-Objekt, das genuegt und spart die Rahmung.
-        let events = StageEventState()
+        let events = Self.collector()
         try await client.stream(url: url, headers: headers,
                                 body: try Self.encode(handoff, stream: true)) { data in
             for text in events.consume(data) { onDelta(text) }
         }
         if let failure = events.pendingFailure() { throw failure }
         return events.reportedUsage()
+    }
+
+    /// Der Leser der Stufen-Seite: NDJSON statt SSE, weil die Gegenstelle ein
+    /// Dienst ist, kein Browser — eine Zeile ist ein JSON-Objekt, das genuegt
+    /// und spart die Rahmung. Unlesbare Zeilen werden uebersprungen, ein
+    /// `{"error": ...}` wird gemerkt statt verschluckt.
+    static func collector() -> StreamCollector {
+        StreamCollector(framing: .newlineDelimitedJSON) { payload in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8))
+                    as? [String: Any] else { return StreamCollector.Event() }
+            if let message = object["error"] as? String {
+                return StreamCollector.Event(failure: .upstream(status: 502, body: message))
+            }
+            return StreamCollector.Event(delta: object["delta"] as? String,
+                                         usage: StageDownstream.usage(from: object["usage"]))
+        }
     }
 
     // MARK: - Kanonische Form
@@ -141,56 +155,5 @@ public struct StageDownstream: Downstream {
         let completion = object["completion_tokens"] as? Int ?? object["completionTokens"] as? Int
         guard prompt != nil || completion != nil else { return nil }
         return TokenUsage(promptTokens: prompt ?? 0, completionTokens: completion ?? 0)
-    }
-}
-
-/// Zerlegt den NDJSON-Strom der naechsten Stufe.
-///
-/// Gekapselt und gesperrt, weil der Rueckruf des Clients aus einem
-/// Hintergrund-Thread kommt — dieselbe Bauform wie `EventState` fuer die
-/// Provider-Seite.
-///
-/// `internal` statt `private`, damit die Tests die Zerlegung ueber
-/// Chunk-Grenzen hinweg fahren koennen. Dieselbe Ueberlegung wie beim
-/// `HTTPResponder`: was nur mit einem echten Socket erreichbar ist, bleibt
-/// ungetestet, und genau dort sassen bisher die Fehler.
-final class StageEventState: @unchecked Sendable {
-
-    private var parser = EventStreamParser(framing: .newlineDelimitedJSON)
-    private var usage: TokenUsage?
-    /// Ein `{"error": ...}` im Strom. Wird gemerkt statt sofort geworfen: der
-    /// Rueckruf kann nicht werfen, und ein still verschluckter Fehler saehe
-    /// fuer den Client wie eine vollstaendige Antwort aus.
-    private var failure: GatewayServerError?
-    private let lock = NSLock()
-
-    func consume(_ data: Data) -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        var deltas: [String] = []
-        for payload in parser.consume(data) {
-            guard let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8))
-                    as? [String: Any] else { continue }
-            if let message = object["error"] as? String {
-                failure = .upstream(status: 502, body: message)
-                continue
-            }
-            if let reported = StageDownstream.usage(from: object["usage"]) {
-                usage = usage.map { $0.merging(reported) } ?? reported
-            }
-            if let text = object["delta"] as? String, !text.isEmpty {
-                deltas.append(text)
-            }
-        }
-        return deltas
-    }
-
-    func reportedUsage() -> TokenUsage? {
-        lock.lock(); defer { lock.unlock() }
-        return usage
-    }
-
-    func pendingFailure() -> GatewayServerError? {
-        lock.lock(); defer { lock.unlock() }
-        return failure
     }
 }

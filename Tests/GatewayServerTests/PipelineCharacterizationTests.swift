@@ -120,18 +120,16 @@ final class PipelineCharacterizationTests: XCTestCase {
 
 // MARK: - Provider-Strom-Zustand ueber Chunk-Grenzen
 
-final class EventStateTests: XCTestCase {
+final class ProviderStreamCollectorTests: XCTestCase {
 
     func testDeltasAreAssembledAcrossChunkBoundaries() {
-        let state = EventState(framing: .serverSentEvents)
-        let dialect = OpenAIAdapter()
+        let state = ProviderDownstream.collector(for: OpenAIAdapter())
 
-        let whole = state.consume(Data("data: {\"choices\":[{\"delta\":{\"content\":\"Hal\"}}]}\n\n".utf8),
-                                  using: dialect)
+        let whole = state.consume(Data("data: {\"choices\":[{\"delta\":{\"content\":\"Hal\"}}]}\n\n".utf8))
         // Eine ueber zwei Chunks zerrissene Ereigniszeile liefert erst beim
         // zweiten Chunk — und dann genau einmal.
-        let half = state.consume(Data("data: {\"choices\":[{\"delta\":{\"con".utf8), using: dialect)
-        let rest = state.consume(Data("tent\":\"lo\"}}]}\n\n".utf8), using: dialect)
+        let half = state.consume(Data("data: {\"choices\":[{\"delta\":{\"con".utf8))
+        let rest = state.consume(Data("tent\":\"lo\"}}]}\n\n".utf8))
 
         XCTAssertEqual(whole, ["Hal"])
         XCTAssertEqual(half, [])
@@ -141,16 +139,15 @@ final class EventStateTests: XCTestCase {
     func testSplitUsageReportsAreMerged() {
         // Manche Dialekte melden Eingabe- und Ausgabe-Verbrauch in
         // verschiedenen Ereignissen; der Zustand vereinigt sie feldweise.
-        let state = EventState(framing: .serverSentEvents)
-        let dialect = OpenAIAdapter()
-        _ = state.consume(Data("data: {\"usage\":{\"prompt_tokens\":7}}\n\n".utf8), using: dialect)
-        _ = state.consume(Data("data: {\"usage\":{\"completion_tokens\":9}}\n\n".utf8), using: dialect)
+        let state = ProviderDownstream.collector(for: OpenAIAdapter())
+        _ = state.consume(Data("data: {\"usage\":{\"prompt_tokens\":7}}\n\n".utf8))
+        _ = state.consume(Data("data: {\"usage\":{\"completion_tokens\":9}}\n\n".utf8))
         XCTAssertEqual(state.reportedUsage(), TokenUsage(promptTokens: 7, completionTokens: 9))
     }
 
     func testTerminatorYieldsNoDelta() {
-        let state = EventState(framing: .serverSentEvents)
-        XCTAssertEqual(state.consume(Data("data: [DONE]\n\n".utf8), using: OpenAIAdapter()), [])
+        let state = ProviderDownstream.collector(for: OpenAIAdapter())
+        XCTAssertEqual(state.consume(Data("data: [DONE]\n\n".utf8)), [])
     }
 }
 
