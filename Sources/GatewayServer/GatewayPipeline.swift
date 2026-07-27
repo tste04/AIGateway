@@ -21,6 +21,13 @@ import InputFirewall
 
 public actor GatewayPipeline {
 
+    /// Alles, was der Rueckweg braucht, um die Antwort abzulegen.
+    public struct CacheTicket: Sendable {
+        public let key: CacheKey
+        public let embedding: [Double]?
+        public let entities: EntitySignature
+    }
+
     public struct Outcome: Sendable {
         public let decision: GatewayDecision
         public let audit: AuditEvent
@@ -28,18 +35,41 @@ public actor GatewayPipeline {
         public let forward: ChatRequest?
         /// Rueckuebersetzung fuer den Antwortpfad.
         public let session: MaskingSession
+        /// Antwort aus dem Cache, noch MASKIERT. Ist sie gesetzt, entfaellt
+        /// der Weg nach oben; de-maskiert wird sie mit `session`.
+        public let cached: ChatResponse?
+        /// Gesetzt, wenn die Antwort abgelegt werden soll. `nil` bei Treffer
+        /// (liegt schon), bei nicht cachebaren Anfragen und ohne Cache.
+        public let cacheTicket: CacheTicket?
+
+        init(decision: GatewayDecision, audit: AuditEvent, forward: ChatRequest?,
+             session: MaskingSession, cached: ChatResponse? = nil,
+             cacheTicket: CacheTicket? = nil) {
+            self.decision = decision
+            self.audit = audit
+            self.forward = forward
+            self.session = session
+            self.cached = cached
+            self.cacheTicket = cacheTicket
+        }
     }
 
     private let injection: InjectionScanner
     private let pii: PIIGate?
     private let policy: GatewayPolicy
+    private let cache: SemanticCache?
+    private let embedder: Embedder?
 
     public init(injection: InjectionScanner = InjectionScanner(),
                 pii: PIIGate? = nil,
-                policy: GatewayPolicy = .standard) {
+                policy: GatewayPolicy = .standard,
+                cache: SemanticCache? = nil,
+                embedder: Embedder? = nil) {
         self.injection = injection
         self.pii = pii
         self.policy = policy
+        self.cache = cache
+        self.embedder = embedder
     }
 
     /// Vertrauensstufe aus der Nachrichtenrolle.
@@ -179,9 +209,41 @@ public actor GatewayPipeline {
             }
         }
 
-        // Platz fuer Stufe 4 (DLP-Policy) und Stufe 5 (Semantic-Cache-Lookup).
-        // Der Cache gehoert HIERHIN — nach der Firewall, mit
-        // `principal.cachePartition` im Schluessel.
+        // Platz fuer Stufe 4 (DLP-Policy).
+
+        // Stufe 5 — Semantic-Cache-Lookup. HIER und nirgends sonst: nach der
+        // Firewall (sonst waere der Cache mit vergifteten Prompts befuellbar
+        // und an ihr vorbei ausspielbar) und nach der Maskierung (sonst laegen
+        // Klardaten im Index).
+        //
+        // ZWEI ABWEICHUNGEN vom Verhalten der Firewall-Stufen, beide bewusst:
+        //
+        //   - Der Cache unterliegt NICHT dem Fail-closed-Budget. Er ist ein
+        //     Kostenhebel, keine Schutzstufe; sein einziger legitimer
+        //     Fehlerausgang ist der Fehltreffer. Ein langsamer Embedder darf
+        //     eine Anfrage niemals blocken, und eine langsame Cache-Stufe darf
+        //     die Entscheidung nicht als `degraded` markieren — das Wort ist
+        //     fuer unvollstaendige SICHERHEITSBEWERTUNG reserviert.
+        //   - Ein Ausfall des Embedders wird geschluckt. Ohne Vektor entfaellt
+        //     die semantische Stufe, die exakte bleibt.
+        var cached: ChatResponse?
+        var ticket: CacheTicket?
+        if let cache, await cache.isCacheable(forwarded) {
+            let cacheStart = DispatchTime.now().uptimeNanoseconds
+            let key = CacheKey(partition: principal.cachePartition, request: forwarded)
+            let entities = EntitySignature.of(key.prompt)
+            // Einbettung ausserhalb des Cache-Actors holen: Netz-I/O gehoert
+            // nicht hinter eine Sperre, die alle Treffer serialisieren wuerde.
+            let vector = await embedding(for: key.prompt)
+            if let hit = await cache.lookup(key: key, embedding: vector, entities: entities) {
+                cached = hit.response
+            } else {
+                ticket = CacheTicket(key: key, embedding: vector, entities: entities)
+            }
+            timings.append(StageTiming(stage: "cache",
+                                       milliseconds: elapsed(since: cacheStart),
+                                       timedOut: false))
+        }
 
         let disposition: Disposition = wasModified ? .allowModified : .allow
         let decision = GatewayDecision(
@@ -192,7 +254,27 @@ public actor GatewayPipeline {
                        audit: AuditEvent(decision: decision, principal: principal,
                                          model: request.model),
                        forward: forwarded,
-                       session: MaskingSession(mapping: mapping))
+                       session: MaskingSession(mapping: mapping),
+                       cached: cached,
+                       cacheTicket: ticket)
+    }
+
+    /// Vektor zur Anfrage, oder `nil`. Schluckt jeden Fehler: der Embedder ist
+    /// die einzige Netz-Abhaengigkeit im Anfragepfad, und sein Ausfall darf
+    /// hoechstens einen Fehltreffer kosten.
+    private func embedding(for prompt: String) async -> [Double]? {
+        guard let embedder else { return nil }
+        return try? await embedder.embed(prompt)
+    }
+
+    /// Legt die Antwort zum Ticket ab.
+    ///
+    /// Die Pipeline besitzt den Cache; der Rueckweg reicht ihr nur das
+    /// Ergebnis. `maskedResponse` MUSS noch Platzhalter tragen — siehe
+    /// `SemanticCache`, Punkt 2.
+    public func store(_ ticket: CacheTicket, maskedResponse: ChatResponse) async {
+        await cache?.store(key: ticket.key, maskedResponse: maskedResponse,
+                           embedding: ticket.embedding, entities: ticket.entities)
     }
 
     // MARK: - Stabile Regel-IDs dieser Stufe

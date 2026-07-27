@@ -47,6 +47,7 @@ public final class GatewayService: @unchecked Sendable {
     private let configuration: GatewayConfiguration
     private let pipeline: GatewayPipeline
     private let downstream: Downstream
+    private let principals: PrincipalResolver
     private let onAudit: (@Sendable (AuditEvent) -> Void)?
     private let onCompletion: (@Sendable (CompletionEvent) -> Void)?
     private var server: HTTPServer?
@@ -56,6 +57,7 @@ public final class GatewayService: @unchecked Sendable {
     public convenience init(configuration: GatewayConfiguration,
                            pipeline: GatewayPipeline,
                            client: UpstreamClient = UpstreamClient(),
+                           principals: PrincipalResolver = AnonymousPrincipalResolver(),
                            onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                            onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.init(configuration: configuration,
@@ -65,20 +67,28 @@ public final class GatewayService: @unchecked Sendable {
                     baseURL: configuration.upstreamBaseURL,
                     apiKey: configuration.apiKey,
                     client: client),
+                  principals: principals,
                   onAudit: onAudit,
                   onCompletion: onCompletion)
     }
 
     /// Betriebsart „Stufe": das Ziel wird gesetzt. `configuration.upstream` und
     /// `upstreamBaseURL` bleiben dann ungenutzt.
+    ///
+    /// - Parameter principals: stellt die Identitaet des Aufrufers fest.
+    ///   Default ist `AnonymousPrincipalResolver` — Identitaets-Header werden
+    ///   dann IGNORIERT, nicht geglaubt. Mandanten-Trennung (und damit ein
+    ///   partitionierter Cache) verlangt einen echten Resolver.
     public init(configuration: GatewayConfiguration,
                 pipeline: GatewayPipeline,
                 downstream: Downstream,
+                principals: PrincipalResolver = AnonymousPrincipalResolver(),
                 onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                 onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.configuration = configuration
         self.pipeline = pipeline
         self.downstream = downstream
+        self.principals = principals
         self.onAudit = onAudit
         self.onCompletion = onCompletion
     }
@@ -118,15 +128,22 @@ public final class GatewayService: @unchecked Sendable {
             return connection.respond(status: 400, json: ["error": "\(error)"])
         }
 
-        // Identitaet kommt von der Identity-Stufe davor. Ohne Header laeuft das
-        // Gateway im Einzelnutzer-Betrieb — bewusst kein stiller Ausfall, aber
-        // auch kein erfundener Nutzer.
-        let principal = Principal(
-            subject: request.header("x-gateway-subject") ?? Principal.anonymous.subject,
-            tenant: request.header("x-gateway-tenant"),
-            scopes: Set((request.header("x-gateway-scopes") ?? "")
-                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }))
+        // Identitaet kommt von der Identity-Stufe davor — aber sie wird nicht
+        // mehr blind geglaubt. Der Resolver entscheidet; sein Default ignoriert
+        // Behauptungen, statt ihnen zu folgen. Das ist die Vorbedingung fuer
+        // den partitionierten Cache: `cachePartition` entsteht aus Mandant und
+        // Scopes, und ein frei waehlbarer Mandant waere ein Zugriffs-Bypass.
+        let principal: Principal
+        switch principals.resolve(request) {
+        case .identified(let resolved):
+            principal = resolved
+        case .anonymous:
+            principal = .anonymous
+        case .rejected(let reason):
+            var payload: [String: Any] = ["error": "unauthenticated"]
+            if configuration.debugErrorDetails { payload["detail"] = reason }
+            return connection.respond(status: 401, json: payload)
+        }
 
         let outcome = await pipeline.process(chat, principal: principal)
         onAudit?(outcome.audit)
@@ -155,6 +172,25 @@ public final class GatewayService: @unchecked Sendable {
             riskScore: outcome.decision.riskScore,
             findings: outcome.decision.findings)
 
+        // Cache-Treffer: der Weg nach oben entfaellt.
+        //
+        // Die Antwort liegt MASKIERT im Cache und wird mit der Session DIESER
+        // Anfrage aufgeloest. Deshalb sieht jeder Aufrufer seine eigenen
+        // Klardaten und nie die des Vorgaengers — dieselbe Partition teilt sich
+        // einen Vault, also steht derselbe Platzhalter bei beiden fuer
+        // denselben Wert. Kennt die Session einen Platzhalter nicht, bleibt er
+        // stehen: sichtbar falsch statt still falsch aufgeloest.
+        if let cached = outcome.cached {
+            let hitStart = DispatchTime.now().uptimeNanoseconds
+            respondFromCache(cached, inbound: inbound, session: outcome.session,
+                             streamed: forward.stream, model: forward.model,
+                             connection: connection)
+            emitCompletion(handoff, model: cached.model.isEmpty ? forward.model : cached.model,
+                           usage: cached.usage, since: hitStart,
+                           streamed: forward.stream, status: 200, cacheHit: true)
+            return
+        }
+
         // Der Weg nach oben wird gemessen — nur er, nicht die Firewall davor.
         // Deren Zeiten stehen als `StageTiming` im Audit-Eintrag.
         let upstreamStart = DispatchTime.now().uptimeNanoseconds
@@ -166,6 +202,12 @@ public final class GatewayService: @unchecked Sendable {
             } else {
                 facts = try await relayOnce(handoff, inbound: inbound,
                                             session: outcome.session, connection: connection)
+            }
+            // Ablegen, was der Provider geliefert hat — im MASKIERTEN Stand,
+            // nicht in dem, den der Client gesehen hat.
+            if let ticket = outcome.cacheTicket {
+                await pipeline.store(ticket, maskedResponse: ChatResponse(
+                    model: facts.model, content: facts.maskedContent, usage: facts.usage))
             }
             emitCompletion(handoff, model: facts.model, usage: facts.usage,
                            since: upstreamStart, streamed: forward.stream, status: 200)
@@ -202,18 +244,55 @@ public final class GatewayService: @unchecked Sendable {
     private struct RelayFacts {
         let model: String
         let usage: TokenUsage?
+        /// Der Antworttext, wie der Provider ihn geliefert hat — also noch mit
+        /// Platzhaltern. Das ist der Stand, der in den Cache gehoert.
+        let maskedContent: String
+    }
+
+    /// Antwortet aus dem Cache, ohne den Provider zu fragen.
+    private func respondFromCache(_ cached: ChatResponse, inbound: ProviderAdapter,
+                                  session: MaskingSession, streamed: Bool, model: String,
+                                  connection: any HTTPResponder) {
+        let text = session.unmask(cached.content)
+        guard streamed else {
+            var response = cached
+            response.content = text
+            guard let body = try? inbound.encodeResponse(response) else {
+                return connection.respond(status: 500, json: ["error": "encoding failed"])
+            }
+            return connection.respond(status: 200, contentType: "application/json",
+                                      body: body, extraHeaders: [:])
+        }
+        // Der Strom wird nachgebildet: ein Ereignis mit dem ganzen Text, dann
+        // der regulaere Abschluss. Die Antwort liegt vollstaendig vor — sie in
+        // Haeppchen zu zerlegen taeuschte eine Erzeugung vor, die nicht
+        // stattfindet.
+        connection.beginStream(contentType: inbound.framing == .serverSentEvents
+                               ? "text/event-stream" : "application/x-ndjson")
+        if !text.isEmpty {
+            connection.writeChunk(Self.frame(inbound.encodeStreamDelta(text, model: model),
+                                             as: inbound.framing))
+        }
+        if let terminator = inbound.streamTerminator(model: model) {
+            connection.writeChunk(Self.frame(terminator, as: inbound.framing))
+        }
+        connection.endStream()
     }
 
     private func relayOnce(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
                            session: MaskingSession,
                            connection: any HTTPResponder) async throws -> RelayFacts {
-        var response = try await downstream.send(handoff)
-        // Rueckweg: Klardaten wieder einsetzen.
-        response.content = session.unmask(response.content)
-        connection.respond(status: 200, body: try inbound.encodeResponse(response))
+        let upstream = try await downstream.send(handoff)
+        var response = upstream
+        // Rueckweg: Klardaten wieder einsetzen. `upstream` behaelt den
+        // maskierten Stand fuer den Cache.
+        response.content = session.unmask(upstream.content)
+        connection.respond(status: 200, contentType: "application/json",
+                           body: try inbound.encodeResponse(response), extraHeaders: [:])
         // Meldet der Provider kein Modell zurueck, gilt das angefragte.
         return RelayFacts(model: response.model.isEmpty ? handoff.request.model : response.model,
-                          usage: response.usage)
+                          usage: response.usage,
+                          maskedContent: upstream.content)
     }
 
     private func relayStream(_ handoff: GatewayHandoff, inbound: ProviderAdapter,
@@ -245,14 +324,14 @@ public final class GatewayService: @unchecked Sendable {
             connection.writeChunk(Self.frame(terminator, as: inbound.framing))
         }
         connection.endStream()
-        return RelayFacts(model: model, usage: usage)
+        return RelayFacts(model: model, usage: usage, maskedContent: state.maskedText())
     }
 
     // MARK: - Abschluss melden
 
     private func emitCompletion(_ handoff: GatewayHandoff, model: String,
                                 usage: TokenUsage?, since start: UInt64,
-                                streamed: Bool, status: Int) {
+                                streamed: Bool, status: Int, cacheHit: Bool = false) {
         guard let onCompletion else { return }
         onCompletion(CompletionEvent(
             correlationID: handoff.correlationID,
@@ -261,7 +340,8 @@ public final class GatewayService: @unchecked Sendable {
             usage: usage,
             upstreamMilliseconds: Double(DispatchTime.now().uptimeNanoseconds &- start) / 1_000_000,
             streamed: streamed,
-            status: status))
+            status: status,
+            cacheHit: cacheHit))
     }
 
     private static func frame(_ payload: String, as framing: StreamFraming) -> String {
@@ -277,6 +357,10 @@ public final class GatewayService: @unchecked Sendable {
 /// gesperrt.
 private final class RewriteState: @unchecked Sendable {
     private var rewriter: StreamRewriter
+    /// Der Strom im maskierten Originalstand — das, was in den Cache gehoert.
+    /// Muss hier mitlaufen: nach der De-Maskierung ist der Platzhalter-Stand
+    /// nicht mehr rekonstruierbar.
+    private var masked = ""
     private let lock = NSLock()
 
     init(session: MaskingSession) {
@@ -285,11 +369,17 @@ private final class RewriteState: @unchecked Sendable {
 
     func push(_ delta: String) -> String {
         lock.lock(); defer { lock.unlock() }
+        masked += delta
         return rewriter.push(delta)
     }
 
     func flush() -> String {
         lock.lock(); defer { lock.unlock() }
         return rewriter.flush()
+    }
+
+    func maskedText() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return masked
     }
 }

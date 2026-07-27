@@ -273,6 +273,208 @@ final class GatewayServiceTests: XCTestCase {
     }
 }
 
+// MARK: - Identitaet und Cache im Zusammenspiel
+
+final class ServiceIdentityAndCacheTests: XCTestCase {
+
+    private func makeService(downstream: Downstream,
+                             cache: SemanticCache? = nil,
+                             pii: Bool = false,
+                             principals: PrincipalResolver = AnonymousPrincipalResolver(),
+                             onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil)
+    -> GatewayService {
+        var policy = GatewayPolicy.standard
+        policy.stageBudgetMilliseconds = 10_000
+        let pipeline = GatewayPipeline(
+            pii: pii ? PIIGate(policy: .gatewayDefault, baseDirectory: nil) : nil,
+            policy: policy,
+            cache: cache)
+        return GatewayService(
+            configuration: GatewayConfiguration(),
+            pipeline: pipeline,
+            downstream: downstream,
+            principals: principals,
+            onCompletion: onCompletion)
+    }
+
+    private func post(_ json: [String: Any], headers: [String: String] = [:]) -> HTTPRequest {
+        HTTPRequest(method: "POST", path: "/v1/chat/completions", headers: headers,
+                    body: try! JSONSerialization.data(withJSONObject: json))
+    }
+
+    private func chat(_ content: String, stream: Bool = false) -> [String: Any] {
+        ["model": "m", "stream": stream, "messages": [["role": "user", "content": content]]]
+    }
+
+    // MARK: Identitaet
+
+    func testIdentityHeadersAreIgnoredWithoutAResolver() async {
+        // Der Kern der Vorbedingung: ein Aufrufer kann seine Partition nicht
+        // waehlen, solange kein Resolver konfiguriert ist.
+        let seen = Locked<CompletionEvent?>(nil)
+        let service = makeService(
+            downstream: FakeDownstream(onSend: { _ in ChatResponse(model: "m", content: "ok") }),
+            onCompletion: { seen.set($0) })
+
+        await service.handle(post(chat("hallo"), headers: [
+            "x-gateway-subject": "mallory",
+            "x-gateway-tenant": "fremd-ag",
+            "x-gateway-scopes": "finance",
+        ]), RecordingResponder())
+
+        let event = seen.get()
+        XCTAssertEqual(event?.subject, Principal.anonymous.subject)
+        XCTAssertNil(event?.tenant, "ein behaupteter Mandant darf nicht uebernommen werden")
+    }
+
+    func testClaimWithoutCredentialIsRejectedWith401() async {
+        let resolver = SharedSecretPrincipalResolver(secret: "s3cret")!
+        let service = makeService(
+            downstream: FakeDownstream(onSend: { _ in
+                XCTFail("abgewiesene Anfrage darf den Provider nicht erreichen")
+                return ChatResponse(model: "m", content: "")
+            }),
+            principals: resolver)
+
+        let responder = RecordingResponder()
+        await service.handle(post(chat("hallo"), headers: ["x-gateway-tenant": "fremd-ag"]),
+                             responder)
+        XCTAssertEqual(responder.status, 401)
+    }
+
+    func testValidCredentialCarriesTenantIntoTheCompletionEvent() async {
+        let resolver = SharedSecretPrincipalResolver(secret: "s3cret")!
+        let seen = Locked<CompletionEvent?>(nil)
+        let service = makeService(
+            downstream: FakeDownstream(onSend: { _ in ChatResponse(model: "m", content: "ok") }),
+            principals: resolver,
+            onCompletion: { seen.set($0) })
+
+        await service.handle(post(chat("hallo"), headers: [
+            "x-gateway-auth": "s3cret",
+            "x-gateway-tenant": "acme",
+        ]), RecordingResponder())
+
+        XCTAssertEqual(seen.get()?.tenant, "acme")
+    }
+
+    // MARK: Cache
+
+    func testSecondIdenticalRequestSkipsTheProvider() async {
+        let calls = Locked<Int>(0)
+        let fake = FakeDownstream(onSend: { _ in
+            calls.set(calls.get() + 1)
+            return ChatResponse(model: "m", content: "die Antwort")
+        })
+        let service = makeService(downstream: fake, cache: SemanticCache())
+
+        let first = RecordingResponder()
+        await service.handle(post(chat("Was ist ein Gateway?")), first)
+        let second = RecordingResponder()
+        await service.handle(post(chat("Was ist ein Gateway?")), second)
+
+        XCTAssertEqual(calls.get(), 1, "der zweite Aufruf muss aus dem Cache kommen")
+        XCTAssertTrue(second.bodyText.contains("die Antwort"))
+    }
+
+    func testCacheHitIsMarkedInTheCompletionEvent() async {
+        let events = Locked<[CompletionEvent]>([])
+        let service = makeService(
+            downstream: FakeDownstream(onSend: { _ in
+                ChatResponse(model: "m", content: "die Antwort") }),
+            cache: SemanticCache(),
+            onCompletion: { events.append($0) })
+
+        await service.handle(post(chat("Was ist ein Gateway?")), RecordingResponder())
+        await service.handle(post(chat("Was ist ein Gateway?")), RecordingResponder())
+
+        let recorded = events.get()
+        XCTAssertEqual(recorded.count, 2)
+        XCTAssertFalse(recorded[0].cacheHit)
+        XCTAssertTrue(recorded[1].cacheHit)
+    }
+
+    func testCachedAnswerIsUnmaskedForTheSecondCaller() async {
+        // Die tragende Eigenschaft: abgelegt wird der MASKIERTE Stand. Der
+        // zweite Aufrufer loest ihn mit seiner eigenen Session auf.
+        let calls = Locked<Int>(0)
+        let fake = FakeDownstream(onSend: { _ in
+            calls.set(calls.get() + 1)
+            return ChatResponse(model: "m", content: "Notiert fuer [Person-1].")
+        })
+        let service = makeService(downstream: fake, cache: SemanticCache(), pii: true)
+
+        let body = chat("Bitte an Frau Anna Schmidt senden.")
+        let first = RecordingResponder()
+        await service.handle(post(body), first)
+        let second = RecordingResponder()
+        await service.handle(post(body), second)
+
+        XCTAssertEqual(calls.get(), 1)
+        XCTAssertTrue(first.bodyText.contains("Anna Schmidt"))
+        XCTAssertTrue(second.bodyText.contains("Anna Schmidt"),
+                      "der Treffer muss de-maskiert beim Client ankommen")
+        XCTAssertFalse(second.bodyText.contains("[Person-1]"))
+    }
+
+    func testStreamedCacheHitReplaysAndTerminates() async {
+        let calls = Locked<Int>(0)
+        let fake = FakeDownstream(onStream: { _, onDelta in
+            calls.set(calls.get() + 1)
+            onDelta("Hallo ")
+            onDelta("Welt")
+            return nil
+        })
+        let service = makeService(downstream: fake, cache: SemanticCache())
+
+        let first = RecordingResponder()
+        await service.handle(post(chat("Gruesse mich", stream: true)), first)
+        let second = RecordingResponder()
+        await service.handle(post(chat("Gruesse mich", stream: true)), second)
+
+        XCTAssertEqual(calls.get(), 1)
+        XCTAssertTrue(second.joinedChunks.contains("Hallo Welt"))
+        XCTAssertTrue(second.joinedChunks.contains("[DONE]"), "Abschluss muss gesendet werden")
+        XCTAssertTrue(second.streamEnded)
+    }
+
+    func testDifferentTenantsDoNotShareCachedAnswers() async {
+        // Ende zu Ende: derselbe Prompt, andere Berechtigung -> Provider wird
+        // erneut gefragt.
+        let resolver = SharedSecretPrincipalResolver(secret: "s3cret")!
+        let calls = Locked<Int>(0)
+        let fake = FakeDownstream(onSend: { _ in
+            calls.set(calls.get() + 1)
+            return ChatResponse(model: "m", content: "vertraulich")
+        })
+        let service = makeService(downstream: fake, cache: SemanticCache(), principals: resolver)
+
+        let body = chat("Gehalt der Geschaeftsfuehrung")
+        await service.handle(post(body, headers: [
+            "x-gateway-auth": "s3cret", "x-gateway-tenant": "acme",
+        ]), RecordingResponder())
+        await service.handle(post(body, headers: [
+            "x-gateway-auth": "s3cret", "x-gateway-tenant": "fremd-ag",
+        ]), RecordingResponder())
+
+        XCTAssertEqual(calls.get(), 2, "der Cache darf die Mandantengrenze nicht ueberschreiten")
+    }
+
+    func testUncacheableRequestsAlwaysReachTheProvider() async {
+        let calls = Locked<Int>(0)
+        let fake = FakeDownstream(onSend: { _ in
+            calls.set(calls.get() + 1)
+            return ChatResponse(model: "m", content: "ok")
+        })
+        let service = makeService(downstream: fake, cache: SemanticCache())
+
+        // Zeitbezug -> nicht cachebar.
+        await service.handle(post(chat("Was ist heute wichtig?")), RecordingResponder())
+        await service.handle(post(chat("Was ist heute wichtig?")), RecordingResponder())
+        XCTAssertEqual(calls.get(), 2)
+    }
+}
+
 // MARK: - Fehler-Ereignisse je Dialekt
 
 final class StreamErrorEncodingTests: XCTestCase {
