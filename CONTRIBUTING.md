@@ -49,7 +49,7 @@ PRs violating these will be declined regardless of usefulness.
   `AuditEvent(decision:principal:)` is the only intended path and drops the payload
   on purpose.
 - **Rule IDs are stable.** `INJ-001`, `SEC-002`, `PII-004`, `SAN-003`, `ANO-001`,
-  `GW-001`, `PII-900`. Suppressions, SIEM rules and dashboards bind to them; changing
+  `GW-001`, `GW-002`, `GW-003`, `PII-900`. Suppressions, SIEM rules and dashboards bind to them; changing
   one is a breaking change. Adding is fine, and `message` text is free to reword.
 - **Scanners detect, the policy decides.** A `ContentScanner` returns findings and a
   score; it never decides to block. Logic of the form "block above score X" must not
@@ -67,6 +67,18 @@ PRs violating these will be declined regardless of usefulness.
   density guard with `onDensityExceeded: "abstain"` is the single exception.
 - **No hand-written TLS or crypto.** The server binds to loopback by default and
   termination is the operator's job via a reverse proxy.
+- **Identity claims are never believed on their own.** The default
+  `PrincipalResolver` ignores the identity headers rather than honouring them,
+  so no caller can select a cache partition. A claim presented without a valid
+  credential is answered with 401, never with a silent fallback to anonymous.
+- **The cache stores masked responses.** What goes into `SemanticCache` still
+  carries placeholders; the de-masked text belongs to one requester only.
+  Storing the unmasked answer would turn the cache into a PII leak between
+  users of the same partition.
+- **The cache never blocks a request.** It is a cost lever, not a protection
+  stage: its only legitimate failure is a miss. It is exempt from the
+  fail-closed budget and must not mark a decision `degraded` — that word is
+  reserved for an incomplete *security* verdict.
 
 ## Conventions
 

@@ -30,7 +30,13 @@ Output Guardrails sind nicht Teil davon.
   Denylist-Begriffe.
 - **Provenienz je Nachrichtenrolle**: `system` gilt als vertrauenswürdig,
   `user`/`assistant` als neutral, `tool` als fremd.
-- **Payload-freie Audit-Einträge** mit stabilen Regel-IDs.
+- **Payload-freie Audit-Einträge** mit stabilen Regel-IDs, dazu ein getrenntes
+  Abschluss-Ereignis mit Modell, gemeldetem Token-Verbrauch und Latenz.
+- **Semantic Cache**, partitioniert über Mandant und Scopes: exakter Treffer
+  zuerst, semantisch als zweite Stufe mit Entitäten-Wächter. Abgelegt wird die
+  maskierte Antwort.
+- **Identitäts-Naht** (`PrincipalResolver`): Identitäts-Header werden per
+  Default ignoriert statt geglaubt; wer Mandanten trennt, belegt die Behauptung.
 - **HTTP-/SSE-Server** mit Provider-Adaptern für OpenAI, Anthropic und Ollama,
   eingehend wie ausgehend.
 
@@ -136,6 +142,40 @@ dann bekannt ist: Modell, gemeldeten Token-Verbrauch, Upstream-Latenz und
 Ausgang. Verknüpft sind beide über die `correlationID`. Meldet ein Provider
 keinen Verbrauch, bleibt das Feld leer — geschätzt wird nie.
 
+### Mandanten trennen und cachen
+
+Beides gehört zusammen: der Cache partitioniert über `Principal.cachePartition`
+(Mandant + Scopes), also muss die Identität belegt sein, bevor er eingeschaltet
+wird.
+
+```swift
+let cache = SemanticCache(policy: .on)          // Default AUS, hier eingeschaltet
+
+let pipeline = GatewayPipeline(
+    pii: PIIGate(policy: .gatewayDefault, baseDirectory: dataDir),
+    policy: .standard,
+    cache: cache,
+    // Optional: ohne Embedder arbeitet der Cache rein exakt.
+    embedder: HTTPEmbedder(baseURL: URL(string: "http://127.0.0.1:11434")!))
+
+let service = GatewayService(
+    configuration: GatewayConfiguration(port: 8080),
+    pipeline: pipeline,
+    // Ohne Resolver werden Identitäts-Header ignoriert — es gibt dann genau
+    // eine Partition. Erst dieser Resolver macht Mandanten unterscheidbar.
+    principals: SharedSecretPrincipalResolver(secret: gatewaySecret)!,
+    onCompletion: { event in finops.record(event) })
+```
+
+Die vorgeschaltete Identity-Stufe setzt dann je Anfrage `x-gateway-auth` sowie
+`x-gateway-subject`, `-tenant` und `-scopes`. Eine Behauptung ohne gültiges
+Geheimnis wird mit **401** beantwortet, nicht stillschweigend auf anonym
+zurückgestuft.
+
+Was nicht in den Cache geht: Anfragen mit Tool-Nachrichten, mit ausdrücklich
+hoher Temperatur und mit Zeitbezug („heute", „aktuell", „latest"). Ein Treffer
+erscheint als `cacheHit` im `CompletionEvent`.
+
 Eingehend werden drei Dialekte bedient: `/v1/chat/completions`, `/v1/messages`
 und `/api/chat`. Eingehender und ausgehender Dialekt sind unabhängig — ein Client
 im OpenAI-Dialekt kann bedient werden, während das Gateway nach Anthropic
@@ -158,6 +198,11 @@ Entwurfsregeln, die den Sicherheitseigenschaften zugrunde liegen:
   sanitisierte Text, damit legitimer nicht-lateinischer Inhalt intakt bleibt.
 - **Ein Vault je Mandanten-Partition**, und der Rückweg liest aus der Zuordnung
   der einzelnen Anfrage statt aus globalem Zustand.
+- **Identitäts-Behauptungen werden nicht geglaubt**, sondern per Default
+  ignoriert. Damit kann kein Aufrufer seine Cache-Partition wählen.
+- **Der Cache liegt hinter der Firewall und hinter der Maskierung** und trägt
+  nur maskierte Antworten. Er blockt nie: sein einziger Fehlerausgang ist der
+  Fehltreffer.
 
 **TLS ist nicht enthalten.** Der Server bindet per Default auf Loopback; die
 Terminierung übernimmt ein Reverse Proxy davor. Selbstgeschriebene Krypto ist ein

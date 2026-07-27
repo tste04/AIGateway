@@ -122,9 +122,11 @@ eine Klammer um die Pipeline, kein Durchgangsknoten.
    Embedding-Raum dicht beieinander, brauchen aber verschiedene Antworten.
    Weichen extrahierte Zahlen, Daten oder Eigennamen ab, gibt es keinen Treffer
    — unabhängig von der Cosine-Ähnlichkeit.
-3. **Exakter Hash-Treffer zuerst**, semantisch nur als zweite Stufe mit hoher
+3. **Exakter Treffer zuerst**, semantisch nur als zweite Stufe mit hoher
    Schwelle. Nicht cachebar: Tool-Calling-Turns, hohe Temperatur,
    zeitabhängige Fragen.
+   *(Umsetzung: der Schlüssel trägt den kanonischen Text vollständig statt
+   eines Hashes — Begründung unter „Semantic Cache — Umsetzung".)*
 
 ### PII-Befunde blockieren nicht
 
@@ -299,19 +301,69 @@ Erkennungsstufe werden. Ohne diese Zusage baut der Orchestrator seinen eigenen
 zweiten Scanner — mit eigenen Regel-IDs, an denen dann andere SIEM-Regeln
 hängen.
 
-### Identität wird vorausgesetzt, nicht geprüft
+### Identität wird festgestellt, nicht geglaubt (Juli 2026, umgesetzt)
 
-`Principal` entsteht aus den Headern `x-gateway-subject`, `x-gateway-tenant`,
-`x-gateway-scopes` — **ungeprüft**. Das ist die Arbeitsteilung mit der
-Identity/SSO-Stufe darüber und nur haltbar, solange das Gateway auf Loopback
-bindet und nichts anderes es erreicht.
+Ursprünglich entstand `Principal` direkt aus den Headern `x-gateway-subject`,
+`x-gateway-tenant` und `x-gateway-scopes` — **ungeprüft**. Das war folgenlos,
+solange der `Principal` nur ins Audit wanderte. Mit dem Semantic Cache wird er
+zur **Zugriffsgrenze**: `cachePartition` entsteht aus Mandant und Scopes, also
+hätte ein Aufrufer seine Partition frei gewählt und fremde Antworten abgeholt.
 
-**Sperrvermerk für Rang 5:** `Principal.cachePartition` leitet sich aus Mandant
-und Scopes ab. Solange beide aus einem fälschbaren Header stammen, wählt ein
-Angreifer seine Cache-Partition frei — der Semantic Cache wäre dann genau der
-Access-Control-Bypass, gegen den er partitioniert wird. Der Cache darf erst
-beginnen, wenn die Herkunft des `Principal` verifiziert ist (signiertes Token
-oder ein Transportweg, den nur die Identity-Stufe erreicht).
+Festlegung: eine Naht (`PrincipalResolver`) statt eines festen Header-Lesens.
+Entscheidend ist ihr **Default**:
+
+- `AnonymousPrincipalResolver` (Voreinstellung) **ignoriert** jede
+  Identitäts-Behauptung — er weist sie nicht ab, er übergeht sie. Damit gibt es
+  genau eine Partition, und niemand kann eine wählen. Das ist der
+  Einzelnutzer-Betrieb hinter Loopback.
+- `SharedSecretPrincipalResolver` glaubt die Header nur, wenn die Anfrage ein
+  vereinbartes Geheimnis mitbringt (`x-gateway-auth`, konstantzeitiger
+  Vergleich). Er prüft nicht die Identität selbst, sondern dass die Behauptung
+  von der Stufe stammt, die sie prüfen durfte — der Fall „Transportweg, den nur
+  die Identity-Stufe erreicht".
+- Eine Behauptung ohne gültigen Beleg führt zu **401**, nicht zum stillen
+  Abstieg auf anonym: sonst bekäme derselbe Aufruf je nach Rateglück einmal die
+  fremde und einmal die eigene Partition.
+
+Wer signierte Token prüfen will, implementiert das Protokoll mit einer echten
+Krypto-Bibliothek. Hier wird keine gebaut — die Festlegung „kein Krypto-Eigenbau"
+gilt unverändert. Der konstantzeitige Vergleich ist keine Ausnahme davon: ein
+Vergleich ist keine Primitive, aber ein früher Abbruch verriete über die
+Laufzeit, wie viele Zeichen stimmen.
+
+**Damit ist der Sperrvermerk für Rang 5 aufgehoben.**
+
+### Semantic Cache — Umsetzung (Juli 2026)
+
+Die drei Festlegungen von oben sind gebaut; dazu kamen vier Entscheidungen aus
+der Umsetzung:
+
+1. **Der Schlüssel trägt den kanonischen Text vollständig, nicht dessen Hash.**
+   Ein Hash könnte kollidieren, und eine Kollision hieße, einem Aufrufer die
+   Antwort auf eine fremde Frage auszuliefern. Der Speicher ist über
+   `maxEntries` gedeckelt und der Text maskiert — der Preis ist tragbar.
+   Rollen gehen mit Steuerzeichen-Trennern in den Schlüssel ein, sonst ergäben
+   `system:"a" user:"b"` und `user:"a\nb"` denselben Eintrag.
+2. **Abgelegt wird die maskierte Antwort.** Sie trägt Platzhalter, keine
+   Klardaten. Ein späterer Aufrufer löst sie mit *seiner* Zuordnung auf; da
+   eine Partition sich einen Vault teilt, steht derselbe Platzhalter bei beiden
+   für denselben Wert. Wäre hier die de-maskierte Antwort gelandet, wäre der
+   Cache ein PII-Leck zwischen Nutzern derselben Partition. Kennt eine Session
+   einen Platzhalter nicht, bleibt er stehen — sichtbar falsch statt still
+   falsch aufgelöst.
+3. **Der Cache unterliegt nicht dem Fail-closed-Budget.** Er ist ein
+   Kostenhebel, keine Schutzstufe; sein einziger legitimer Fehlerausgang ist
+   der Fehltreffer. Ein langsamer Embedder darf keine Anfrage blocken, und eine
+   langsame Cache-Stufe darf die Entscheidung nicht als `degraded` markieren —
+   das Wort ist für unvollständige *Sicherheitsbewertung* reserviert. Ein
+   Ausfall des Embedders kostet nur die zweite Stufe; die exakte bleibt.
+4. **Fehlende Temperatur gilt als cachebar.** Wer nichts angibt, fordert keine
+   Varianz an, sondern nimmt, was kommt. Ausdrücklich hohe Temperatur schließt
+   den Cache aus, ebenso Tool-Nachrichten und Zeitbezüge („heute", „aktuell",
+   „latest"). Die Zeitbezugs-Muster decken Deutsch und Englisch ab — wie beim
+   Regelkatalog brauchen andere Sprachen eigene.
+
+### Abwärts-Naht: heute Provider, später die nächste Box
 
 ### Abwärts-Naht: heute Provider, später die nächste Box
 
@@ -431,7 +483,7 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
-| 5 | Semantic Cache | offen — **gesperrt**, s. Identity-Vorbedingung |
+| 5 | Semantic Cache | **fertig** — exakt + semantisch, partitioniert |
 | 6 | DLP-Policy-Semantik | offen |
 | 7 | Malware (ClamAV-Naht) | offen — Anhang-Naht fehlt |
 
@@ -441,8 +493,8 @@ Reihenfolge:
 | Naht | Träger | Stand |
 |---|---|---|
 | Erkennung ohne Transport nutzbar | `GatewayCore` + `InputFirewall` | entschieden, kein Code nötig |
-| Identität vorausgesetzt | Betriebsdoku | entschieden, sperrt Rang 5 |
-| Abwärts-Naht | `Downstream` (Abstraktion) | offen |
-| Abschluss-Ereignis | `CompletionEvent` | offen |
+| Identität festgestellt | `PrincipalResolver` | **fertig** — Default ignoriert Behauptungen |
+| Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Stufen-Variante offen |
+| Abschluss-Ereignis | `CompletionEvent` | **fertig** |
 | Klammer über den Agent Loop | `MaskingSessionStore` | offen |
 | Quarantäne für Eval | `QuarantineSink` | offen |
