@@ -10,6 +10,18 @@ private func makeGate(_ policy: PseudonymizationPolicy = .gatewayDefault) -> PII
     PIIGate(policy: policy, baseDirectory: nil)
 }
 
+/// Sucht die TOKEN-Form zu einem Klarwert.
+///
+/// Die Zuordnung traegt zu jedem Klarwert zwei Schluessel — das Token
+/// (`[Person-1]`) und die Alias-Form (`Alex A.`), damit der Rueckweg beide
+/// aufloest. `Dictionary.first(where:)` hat aber keine definierte Reihenfolge,
+/// und Swift wuerfelt den Hash-Seed je Prozess neu: wer so das „Token" holt,
+/// bekommt mal die eine und mal die andere Form. Genau daran ist dieser Test
+/// auf CI gescheitert, nachdem er lokal und im ersten Lauf zufaellig richtig lag.
+private func personToken(_ mapping: [String: String], for value: String) -> String? {
+    mapping.first { $0.value == value && $0.key.hasPrefix("[Person-") }?.key
+}
+
 // MARK: - Round-Trip: die eigentliche Gateway-Leistung
 
 final class PIIRoundTripTests: XCTestCase {
@@ -105,8 +117,8 @@ final class PIIDetectionTests: XCTestCase {
         let gate = makeGate()
         let a = await gate.mask("Frau Anna Schmidt")
         let b = await gate.mask("Herr Bernd Schmidt")
-        let tokenA = a.session.mapping.first(where: { $0.value == "Anna Schmidt" })?.key
-        let tokenB = b.session.mapping.first(where: { $0.value == "Bernd Schmidt" })?.key
+        let tokenA = personToken(a.session.mapping, for: "Anna Schmidt")
+        let tokenB = personToken(b.session.mapping, for: "Bernd Schmidt")
         XCTAssertNotNil(tokenA)
         XCTAssertNotNil(tokenB)
         XCTAssertNotEqual(tokenA, tokenB)
@@ -252,12 +264,12 @@ final class PseudonymVaultTests: XCTestCase {
 
         let first = Pseudonymizer(vault: PseudonymVault(fileURL: url), policy: .gatewayDefault)
         let a = await first.mask("Frau Anna Schmidt")
-        let tokenA = a.mapping.first(where: { $0.value == "Anna Schmidt" })?.key
+        let tokenA = personToken(a.mapping, for: "Anna Schmidt")
 
         // Neue Instanz auf derselben Datei -> gleiches Token.
         let second = Pseudonymizer(vault: PseudonymVault(fileURL: url), policy: .gatewayDefault)
         let b = await second.mask("Anna Schmidt meldet sich.")
-        let tokenB = b.mapping.first(where: { $0.value == "Anna Schmidt" })?.key
+        let tokenB = personToken(b.mapping, for: "Anna Schmidt")
 
         XCTAssertNotNil(tokenA)
         XCTAssertEqual(tokenA, tokenB)
