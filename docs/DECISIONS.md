@@ -570,6 +570,88 @@ entferntes `tools` — **weisen die Adapter solche Anfragen ab.** Wer die
 Bibliothek direkt benutzt, füllt das Feld selbst und bekommt damit die
 Malware-Stufe. Anhänge zählen in den Größen-Guard mit.
 
+### Rate-Guard, Stufen-Ziel, Cache-Betrieb, Daemon (Juli 2026, umgesetzt)
+
+Vier Stücke, die die Box aus dem Zielbild vollständig machen.
+
+**Der Rate-Guard steht vor der Pipeline, nicht darin.** Das ist der ganze
+Punkt: die Arbeit *ist* die Kosten. Ein Deckel, der erst nach Malware-,
+Injection-, PII- und DLP-Lauf greift, hat die Rechenzeit bereits ausgegeben,
+die er sparen sollte. Er sitzt deshalb in `GatewayService` zwischen Identität
+und Firewall — früher geht nicht, denn ohne festgestellte Identität gibt es
+niemanden zu deckeln. Geschlüsselt wird über **Subject**, nicht über
+`cachePartition`: die Partition ist absichtlich geteilt, damit Nutzer gleicher
+Berechtigung sich Cache-Treffer teilen; daraus ein geteiltes Kontingent zu
+folgern hieße, dass ein Vielnutzer seine Kollegen aushungert. Die Absage ist
+**429 mit `Retry-After`**, nicht 403 — auf 403 hört ein vernünftiger Client
+auf, auf 429 wartet er. Die Regel-ID `GW-004` reiht sich in die GW-Familie ein:
+Guards, die auf die Form der Anfrage schauen statt auf den Inhalt.
+
+Die Buchhaltung ist gedeckelt (`maxTrackedSubjects`), sonst wäre sie ein
+Speicherleck mit fremdgesteuertem Schlüssel. Verdrängt wird dabei
+ausschließlich, was **voll** ist: ein voller Eimer ist informationsgleich mit
+gar keinem, ein angebrochener *ist* das Gedächtnis der Drosselung. Wer den
+verdrängt, baut die Umgehung ein — genug fremde Subject-Namen erzeugen, bis
+der eigene Eimer hinausfliegt und voll zurückkommt. Bleibt kein Platz, wird
+abgewiesen statt zugelassen.
+
+**`StageDownstream` macht die Abwärts-Naht vollständig.** Der Unterschied zum
+Provider-Ziel ist nicht die Adresse, sondern was übergeben wird: eine Anfrage
+*plus* das Urteil der Firewall. Sonst müsste die Policy Engine die Bewertung
+wiederholen, die hier bereits stattgefunden hat, und zwei Stellen entschieden
+über dieselbe Frage. Das Format ist kanonisch und providerfrei. Der
+`message`-Text der Befunde geht **nicht** mit — er ist Anzeigetext und darf
+frei umformuliert werden; eine Gegenstelle, die darauf prüft, bricht beim
+nächsten Textlauf.
+
+**Am Cache waren vier Dinge offen; drei sind gebaut, eines bleibt bewusst eine
+Naht.** Die Verdrängung greift jetzt zuerst je Partition, dann global — wäre es
+umgekehrt, könnte der globale Deckel fremde Einträge wegwerfen, um Platz für
+eine Partition zu schaffen, die ihr eigenes Kontingent gerade überzieht. Das
+ist kein Datenleck, aber Nachbarschaftsschaden, und die Antwort darauf ist
+dieselbe Überlegung wie beim Rate-Guard. Die Trefferquote ist die einzige Zahl,
+an der sich entscheidet, ob der Cache seinen Preis wert ist; sie zu schätzen
+hieße, den Kostenhebel im Dunkeln zu betreiben — `CacheStatistics` zählt
+deshalb mit, payload-frei wie das Audit. Invalidierung gibt es je Partition und
+je Modell: ändert sich Berechtigung oder Modellversion, sind die Einträge nicht
+*abgelaufen*, sondern **falsch**, und die Frist hilft dagegen nicht — sie ist
+ein Zeitmaß, kein Ereignis.
+
+Persistenz bleibt eine **Naht** (`snapshot()`/`restore(_:)`), keine
+Implementierung. Eine Bibliothek, die selbst auf Platte schreibt, entscheidet
+über Ablageort, Verschlüsselung und Löschfristen des Betreibers mit — dieselbe
+Linie wie bei `QuarantineSink` und `PayloadScanner`. Dazu kommt ein zweiter
+Grund, der hier schwerer wiegt: der Inhalt ist nur dann platzhalterbehaftet,
+wenn eine PII-Stufe konfiguriert ist. Ohne sie stehen dort rohe
+Modellantworten, und ein Abzug wäre ein Daten-in-Ruhe-Problem mit demselben
+Bedarf an Frist und Zugriffsschutz wie die Quarantäne.
+
+**`aigatewayd` löst Grundentscheidung 4 ein.** Bis hierhin war das Gateway eine
+Bibliothek; eine Box im Zielbild ist aber etwas, das man startet und wieder
+anhält. Der Daemon bleibt dünn — Konfiguration lesen, Stufen stecken, Signale
+abfangen, geordnet beenden. Jede Zeile Sicherheitslogik dort wäre eine, die die
+Bibliothek nicht hat und die niemand testet; deshalb liegt das Lesen der
+Konfiguration in `GatewayServer` (`DaemonConfiguration`) und ist ohne Prozess
+testbar.
+
+Zwei unbequeme Festlegungen dazu. Erstens: **der API-Schlüssel steht nicht in
+der Datei**, er kommt aus `AIGATEWAY_UPSTREAM_API_KEY`. Konfigurationsdateien
+landen in der Versionsverwaltung, in Backups und in Fehlerberichten; ein Feld
+dafür anzubieten hieße, genau das zu erlauben. Zweitens: **ein unbekannter
+Schlüssel ist ein Fehler.** Ein verschriebenes `similarityTreshold` still zu
+ignorieren heißt, mit einer Einstellung zu laufen, die der Betreiber gesetzt zu
+haben glaubt — bei einer Sicherheitskomponente ist das die schlechtere Hälfte
+von „tolerant lesen". Die Konfiguration darf Stufen **an- und abschalten**,
+niemals ihre Position bestimmen; sonst wäre die Reihenfolge oben eine
+Einstellung.
+
+Der geordnete Stopp (`stop(drainSeconds:)`) schließt erst den Zulauf und lässt
+dann austrinken. Eine Anfrage, die beim Abschalten mitten im Upstream-Aufruf
+steht, hat das Modell bereits bezahlt — sie abzuschneiden kostet Geld und
+liefert dem Client nichts. Läuft die Frist ab, bevor alles fertig ist, meldet
+der Daemon das (`drained: false`, Exit-Code 1), statt einen sauberen Stopp zu
+behaupten.
+
 ## Bekannte Lücken (bewusst offen)
 
 Der Regelkatalog deckt Englisch (INJ-0xx) und Deutsch (INJ-1xx) ab. Andere
@@ -590,9 +672,11 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 2 | PII-Gate + Round-Trip-Maskierung | **fertig** |
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
-| 5 | Semantic Cache | **nutzbar** — exakt + semantisch, partitioniert; Persistenz, Kennzahlen und Invalidierung offen |
+| 5 | Semantic Cache | **fertig** — exakt + semantisch, partitioniert, Kennzahlen, Invalidierung, Abzug |
 | 6 | DLP-Policy-Semantik | **fertig** — block/redact/allow |
 | 7 | Malware (ClamAV-Naht) | **Naht fertig** — strukturelle Stufe gebaut, Engine ist Betreibersache |
+| 8 | Rate-Guard | **fertig** — Token-Eimer je Subject, vor der Pipeline |
+| 9 | Daemon (`aigatewayd`) | **fertig** — Konfigurationsdatei, SIGTERM/SIGINT, geordneter Stopp |
 
 Die Ränge sind Feature-Boxen. Die Nähte laufen quer dazu und haben eine eigene
 Reihenfolge:
@@ -601,7 +685,8 @@ Reihenfolge:
 |---|---|---|
 | Erkennung ohne Transport nutzbar | `GatewayCore` + `InputFirewall` | entschieden, kein Code nötig |
 | Identität festgestellt | `PrincipalResolver` | **fertig** — Default ignoriert Behauptungen |
-| Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Stufen-Variante offen |
+| Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Provider- und Stufen-Variante |
 | Abschluss-Ereignis | `CompletionEvent` | **fertig** |
 | Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
+| Betrieb als Box | `aigatewayd` + `DaemonConfiguration` | **fertig** |
 | Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Senke ist Betreibersache |

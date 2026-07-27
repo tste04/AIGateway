@@ -62,6 +62,17 @@ public struct CacheKey: Hashable, Sendable {
             .map { "\($0.role.rawValue)\u{1F}\($0.content)" }
             .joined(separator: "\u{1E}")
     }
+
+    /// Feldweise — fuer den Wiederanlauf aus einem Abzug, wo die Anfrage nicht
+    /// mehr vorliegt, sondern nur noch ihr kanonischer Text.
+    public init(partition: String, model: String, prompt: String,
+                temperature: Double?, maxTokens: Int?) {
+        self.partition = partition
+        self.model = model
+        self.prompt = prompt
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+    }
 }
 
 // MARK: - Entitaeten
@@ -151,6 +162,14 @@ public struct SemanticCachePolicy: Sendable, Equatable {
     public var timeToLive: TimeInterval
     /// Obergrenze der Eintraege; darueber wird der aelteste Zugriff verdraengt.
     public var maxEntries: Int
+    /// Obergrenze JE PARTITION. `0` heisst: keine.
+    ///
+    /// Ohne sie ist der globale Deckel ein Hebel zwischen Mandanten: wer viel
+    /// schreibt, verdraengt die Eintraege aller anderen und macht deren Cache
+    /// wertlos, ohne je ihre Daten zu sehen. Das ist kein Datenleck, aber ein
+    /// Verfuegbarkeitsproblem — und der Deckel je Partition ist die Antwort
+    /// darauf, dieselbe Ueberlegung wie beim Rate-Guard.
+    public var maxEntriesPerPartition: Int
     /// Ab dieser Kosinus-Aehnlichkeit gilt ein Eintrag als semantischer
     /// Treffer. Bewusst hoch: ein falscher Treffer ist eine falsche Antwort.
     public var similarityThreshold: Double
@@ -170,6 +189,7 @@ public struct SemanticCachePolicy: Sendable, Equatable {
     public init(enabled: Bool = false,
                 timeToLive: TimeInterval = 3600,
                 maxEntries: Int = 1000,
+                maxEntriesPerPartition: Int = 200,
                 similarityThreshold: Double = 0.95,
                 maxTemperature: Double = 0.3,
                 embedderFailureThreshold: Int = 3,
@@ -177,6 +197,7 @@ public struct SemanticCachePolicy: Sendable, Equatable {
         self.enabled = enabled
         self.timeToLive = timeToLive
         self.maxEntries = maxEntries
+        self.maxEntriesPerPartition = maxEntriesPerPartition
         self.similarityThreshold = similarityThreshold
         self.maxTemperature = maxTemperature
         self.embedderFailureThreshold = embedderFailureThreshold
@@ -262,12 +283,18 @@ public actor SemanticCache {
     public nonisolated let policy: SemanticCachePolicy
     private var entries: [CacheKey: Entry] = [:]
     private var clock: UInt64 = 0
+    private var stats = CacheStatistics()
 
     public init(policy: SemanticCachePolicy = .on) {
         self.policy = policy
     }
 
     public func count() -> Int { entries.count }
+
+    /// Eintraege einer Partition — fuer Betrieb und Tests der Quote.
+    public func count(partition: String) -> Int {
+        entries.keys.filter { $0.partition == partition }.count
+    }
 
     /// Darf diese Anfrage in den Cache? Prueft gegen die eigene Policy, damit
     /// der Aufrufer sie nicht kennen muss.
@@ -290,19 +317,21 @@ public actor SemanticCache {
                        now: Date = Date()) -> Hit? {
         guard policy.enabled else { return nil }
         expire(now: now)
+        stats.lookups += 1
 
         // Stufe 1 — exakt. Der Schluessel enthaelt die Partition, damit kann
         // dieser Treffer die Grenze nicht verletzen.
         if let entry = entries[key] {
             clock += 1
             entries[key]?.lastUsed = clock
+            stats.exactHits += 1
             return Hit(response: entry.response, kind: .exact)
         }
 
         // Stufe 2 — semantisch. NUR innerhalb derselben Partition und nur bei
         // gleichem Modell: ein anderes Modell antwortet anders, auch auf
         // dieselbe Frage.
-        guard let embedding else { return nil }
+        guard let embedding else { stats.misses += 1; return nil }
         var best: (key: CacheKey, entry: Entry, score: Double)?
         for (candidateKey, entry) in entries
         where candidateKey.partition == key.partition && candidateKey.model == key.model {
@@ -317,9 +346,10 @@ public actor SemanticCache {
                 best = (candidateKey, entry, score)
             }
         }
-        guard let winner = best else { return nil }
+        guard let winner = best else { stats.misses += 1; return nil }
         clock += 1
         entries[winner.key]?.lastUsed = clock
+        stats.semanticHits += 1
         return Hit(response: winner.entry.response, kind: .semantic)
     }
 
@@ -343,27 +373,208 @@ public actor SemanticCache {
         clock += 1
         entries[key] = Entry(key: key, response: maskedResponse, embedding: embedding,
                              entities: entities, storedAt: now, lastUsed: clock)
-        evictIfNeeded()
+        stats.stores += 1
+        evictIfNeeded(partition: key.partition)
     }
 
-    public func removeAll() { entries.removeAll() }
+    // MARK: - Invalidierung
+    //
+    // Der Cache haelt Antworten eines Modells zu einem Wissensstand. Aendert
+    // sich einer von beiden — neues Modell, neu geladene Wissensbasis,
+    // zurueckgezogene Freigabe eines Mandanten — sind die Eintraege nicht
+    // abgelaufen, sondern FALSCH. Die Frist hilft dagegen nicht: sie ist ein
+    // Zeitmass, kein Ereignis. Deshalb drei gezielte Griffe.
+
+    public func removeAll() {
+        stats.invalidations += entries.count
+        entries.removeAll()
+    }
+
+    /// Wirft alles einer Partition weg — der Griff fuer „Mandant hat seine
+    /// Berechtigung verloren" und fuer jeden Zweifel an der Abgrenzung.
+    @discardableResult
+    public func invalidate(partition: String) -> Int {
+        remove { $0.partition == partition }
+    }
+
+    /// Wirft alles zu einem Modell weg — der Griff fuer „Modellversion
+    /// gewechselt". Antworten eines abgeloesten Modells sind nicht alt,
+    /// sondern von jemand anderem.
+    @discardableResult
+    public func invalidate(model: String) -> Int {
+        remove { $0.model == model }
+    }
+
+    @discardableResult
+    public func invalidate(partition: String, model: String) -> Int {
+        remove { $0.partition == partition && $0.model == model }
+    }
+
+    private func remove(where predicate: (CacheKey) -> Bool) -> Int {
+        let doomed = entries.keys.filter(predicate)
+        for key in doomed { entries.removeValue(forKey: key) }
+        stats.invalidations += doomed.count
+        return doomed.count
+    }
+
+    // MARK: - Metrik
+
+    /// Zaehlerstand. Die Trefferquote ist die einzige Zahl, an der sich
+    /// entscheidet, ob der Cache seinen Preis wert ist — sie zu schaetzen
+    /// hiesse, den Kostenhebel im Dunkeln zu betreiben.
+    public func statistics() -> CacheStatistics { stats }
+
+    public func resetStatistics() { stats = CacheStatistics() }
+
+    // MARK: - Persistenz-Naht
+    //
+    // Der Cache haelt seine Eintraege im Speicher, und dabei bleibt es. Was
+    // hier fehlt, ist bewusst nicht gebaut: eine Bibliothek, die selbst auf
+    // Platte schreibt, entscheidet ueber Ablageort, Verschluesselung und
+    // Loeschfristen des Betreibers mit — dieselbe Ueberlegung wie bei
+    // `QuarantineSink` und `PayloadScanner`.
+    //
+    // ZU BEDENKEN, bevor jemand `snapshot()` auf Platte legt: der Inhalt ist
+    // nur dann platzhalterbehaftet, wenn eine PII-Stufe konfiguriert ist. Ohne
+    // sie stehen dort rohe Modellantworten. Ein Abzug ist damit ein
+    // Daten-in-Ruhe-Problem und braucht dieselbe Behandlung wie die
+    // Quarantaene: Frist, Zugriffsschutz, bewusste Entscheidung.
+
+    /// Abzug des Bestands. Vektoren gehen mit, sonst faellt der Wiederanlauf
+    /// auf die exakte Stufe zurueck, bis jeder Eintrag neu eingebettet ist.
+    public func snapshot() -> CacheSnapshot {
+        CacheSnapshot(entries: entries.values.map {
+            CacheSnapshot.Item(partition: $0.key.partition, model: $0.key.model,
+                               prompt: $0.key.prompt, temperature: $0.key.temperature,
+                               maxTokens: $0.key.maxTokens, response: $0.response,
+                               embedding: $0.embedding, entities: Array($0.entities.terms),
+                               storedAt: $0.storedAt)
+        })
+    }
+
+    /// Spielt einen Abzug ein. Abgelaufene Eintraege werden dabei fallen
+    /// gelassen, nicht mit neuem Datum wiederbelebt — sonst verlaengerte ein
+    /// Neustart jede Frist.
+    ///
+    /// - Returns: Anzahl der uebernommenen Eintraege.
+    @discardableResult
+    public func restore(_ snapshot: CacheSnapshot, now: Date = Date()) -> Int {
+        var taken = 0
+        for item in snapshot.entries {
+            if policy.timeToLive > 0,
+               now.timeIntervalSince(item.storedAt) > policy.timeToLive { continue }
+            let key = CacheKey(partition: item.partition, model: item.model,
+                               prompt: item.prompt, temperature: item.temperature,
+                               maxTokens: item.maxTokens)
+            clock += 1
+            entries[key] = Entry(key: key, response: item.response, embedding: item.embedding,
+                                 entities: EntitySignature(terms: Set(item.entities)),
+                                 storedAt: item.storedAt, lastUsed: clock)
+            taken += 1
+        }
+        evictIfNeeded(partition: nil)
+        return taken
+    }
 
     // MARK: Verdraengung
 
     private func expire(now: Date) {
         guard policy.timeToLive > 0 else { return }
+        let before = entries.count
         entries = entries.filter { now.timeIntervalSince($0.value.storedAt) <= policy.timeToLive }
+        stats.expirations += before - entries.count
     }
 
-    /// Verdraengt den am laengsten nicht genutzten Eintrag, bis die Grenze
-    /// haelt. Ohne Deckel waere der Cache ein Speicherleck mit Ansage.
-    private func evictIfNeeded() {
-        guard policy.maxEntries > 0 else { entries.removeAll(); return }
-        while entries.count > policy.maxEntries {
-            guard let oldest = entries.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else {
+    /// Verdraengt den am laengsten nicht genutzten Eintrag, bis beide Grenzen
+    /// halten. Ohne Deckel waere der Cache ein Speicherleck mit Ansage.
+    ///
+    /// Die Partition zuerst: waere es umgekehrt, koennte der globale Deckel
+    /// fremde Eintraege wegwerfen, um Platz fuer eine Partition zu schaffen,
+    /// die ihr eigenes Kontingent gerade ueberzieht — genau der
+    /// Nachbarschaftsschaden, gegen den `maxEntriesPerPartition` steht.
+    private func evictIfNeeded(partition: String?) {
+        if let partition, policy.maxEntriesPerPartition > 0 {
+            evict(limit: policy.maxEntriesPerPartition) { $0.partition == partition }
+        }
+        guard policy.maxEntries > 0 else {
+            stats.evictions += entries.count
+            entries.removeAll()
+            return
+        }
+        evict(limit: policy.maxEntries) { _ in true }
+    }
+
+    private func evict(limit: Int, scope: (CacheKey) -> Bool) {
+        var inScope = entries.filter { scope($0.key) }
+        while inScope.count > limit {
+            guard let oldest = inScope.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else {
                 return
             }
+            inScope.removeValue(forKey: oldest)
             entries.removeValue(forKey: oldest)
+            stats.evictions += 1
         }
     }
+}
+
+// MARK: - Zaehler
+
+/// Betriebszahlen des Caches. Reine Zaehler, kein Inhalt — dieselbe Linie wie
+/// beim `AuditEvent`: eine Metrik, die Prompts traegt, ist ein Leck mit
+/// Dashboard.
+public struct CacheStatistics: Sendable, Equatable, Codable {
+    public var lookups = 0
+    public var exactHits = 0
+    public var semanticHits = 0
+    public var misses = 0
+    public var stores = 0
+    public var evictions = 0
+    public var expirations = 0
+    public var invalidations = 0
+
+    public init() {}
+
+    public var hits: Int { exactHits + semanticHits }
+
+    /// Anteil der Anfragen, die ohne Modellaufruf beantwortet wurden.
+    /// `nil` bei null Abfragen — 0 % waere hier eine Behauptung ueber nichts.
+    public var hitRate: Double? {
+        guard lookups > 0 else { return nil }
+        return Double(hits) / Double(lookups)
+    }
+}
+
+// MARK: - Abzug
+
+/// Serialisierbarer Bestand des Caches. Siehe die Warnung an `snapshot()`.
+public struct CacheSnapshot: Sendable, Codable {
+    public struct Item: Sendable, Codable {
+        public let partition: String
+        public let model: String
+        public let prompt: String
+        public let temperature: Double?
+        public let maxTokens: Int?
+        public let response: ChatResponse
+        public let embedding: [Double]?
+        public let entities: [String]
+        public let storedAt: Date
+
+        public init(partition: String, model: String, prompt: String, temperature: Double?,
+                    maxTokens: Int?, response: ChatResponse, embedding: [Double]?,
+                    entities: [String], storedAt: Date) {
+            self.partition = partition
+            self.model = model
+            self.prompt = prompt
+            self.temperature = temperature
+            self.maxTokens = maxTokens
+            self.response = response
+            self.embedding = embedding
+            self.entities = entities
+            self.storedAt = storedAt
+        }
+    }
+
+    public let entries: [Item]
+
+    public init(entries: [Item]) { self.entries = entries }
 }

@@ -1,0 +1,50 @@
+{
+  "server": {
+    "port": 8080,
+    "loopbackOnly": true,
+    "upstream": "ollama",
+    "upstreamBaseURL": "http://127.0.0.1:11434",
+    "maxBodyBytes": 1000000,
+    "debugErrorDetails": false
+  },
+  "policy": {
+    "blockThreshold": 0.7,
+    "maxInputBytes": 262144,
+    "maxMessages": 64,
+    "stageBudgetMilliseconds": 50,
+    "failClosed": true
+  },
+  "stages": {
+    "malware": true,
+    "pii": true,
+    "dlp": false
+  },
+  "cache": {
+    "enabled": false,
+    "timeToLive": 3600,
+    "maxEntries": 1000,
+    "maxEntriesPerPartition": 200,
+    "similarityThreshold": 0.95,
+    "maxTemperature": 0.3
+  },
+  "rateLimit": {
+    "enabled": false,
+    "requestsPerInterval": 60,
+    "interval": 60,
+    "burst": 10,
+    "maxTrackedSubjects": 10000
+  },
+  "quarantine": {
+    "enabled": false,
+    "detail": "counts",
+    "retention": 604800,
+    "nearMissBand": 0.15
+  },
+  "maskingSessions": {
+    "enabled": false,
+    "timeToLive": 900,
+    "extendedTimeToLive": 14400,
+    "maxSessions": 10000
+  },
+  "drainSeconds": 15
+}

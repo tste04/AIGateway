@@ -42,7 +42,10 @@ Output Guardrails sind nicht Teil davon.
   Abschluss-Ereignis mit Modell, gemeldetem Token-Verbrauch und Latenz.
 - **Semantic Cache**, partitioniert über Mandant und Scopes: exakter Treffer
   zuerst, semantisch als zweite Stufe mit Entitäten-Wächter. Abgelegt wird die
-  maskierte Antwort.
+  maskierte Antwort. Verdrängung je Partition, Trefferquote als Zahl,
+  Invalidierung je Partition und je Modell.
+- **Rate-Guard** (`RateGuard`): Token-Eimer je Aufrufer, vor der Firewall statt
+  dahinter — die Arbeit ist die Kosten. Antwortet mit 429 und `Retry-After`.
 - **Identitäts-Naht** (`PrincipalResolver`): Identitäts-Header werden per
   Default ignoriert statt geglaubt; wer Mandanten trennt, belegt die Behauptung.
 - **Maskierungs-Klammer über längere Vorgänge** (`MaskingSessionStore`): hält
@@ -53,6 +56,12 @@ Output Guardrails sind nicht Teil davon.
   Prompts ins Audit zu schreiben. Default aus, drei Stufen.
 - **HTTP-/SSE-Server** mit Provider-Adaptern für OpenAI, Anthropic und Ollama,
   eingehend wie ausgehend.
+- **Zwei Betriebsarten nach unten** (`Downstream`): direkt auf einen Provider
+  oder als Stufe vor einer Policy Engine — letztere bekommt die kanonische
+  Anfrage samt Firewall-Urteil, statt die Bewertung zu wiederholen.
+- **Daemon** (`aigatewayd`): JSON-Konfiguration, SIGTERM/SIGINT, geordneter
+  Stopp mit Auslauffrist. Der Upstream-Schlüssel kommt aus der Umgebung,
+  nie aus der Datei.
 
 ## Installation
 
@@ -155,6 +164,46 @@ trotzdem im Log. `CompletionEvent` kommt auf dem Rückweg und trägt, was erst
 dann bekannt ist: Modell, gemeldeten Token-Verbrauch, Upstream-Latenz und
 Ausgang. Verknüpft sind beide über die `correlationID`. Meldet ein Provider
 keinen Verbrauch, bleibt das Feld leer — geschätzt wird nie.
+
+### Als Daemon starten
+
+Wer nichts einbetten will, startet `aigatewayd`:
+
+```bash
+swift build -c release
+export AIGATEWAY_UPSTREAM_API_KEY=…        # nie in die Konfigurationsdatei
+.build/release/aigatewayd --config /etc/aigatewayd.json
+```
+
+Vorlage: [`docs/aigatewayd.example.json`](docs/aigatewayd.example.json). Die
+Konfiguration schaltet Stufen an und ab, bestimmt aber **nie** ihre Position —
+die Reihenfolge liegt in der Pipeline, nicht in einer Datei. Ein unbekannter
+Schlüssel ist ein Fehler und kein Achselzucken: still ignoriert liefe das
+Gateway mit einer Einstellung, die der Betreiber gesetzt zu haben glaubt.
+
+Ereignisse gehen zeilenweise als JSON nach `stderr`. `SIGTERM` und `SIGINT`
+beenden geordnet — kein Zulauf mehr, laufende Anfragen zu Ende, dann Schluss;
+läuft die Auslauffrist ab, sagt der Daemon das (`drained: false`) und endet mit
+Exit-Code 1, statt einen sauberen Stopp zu behaupten.
+
+### Vor einer Policy Engine statt vor einem Provider
+
+Im Zielbild liegt unter dem Gateway nicht das Modell, sondern die nächste Stufe.
+Das ist eine Zeile Unterschied und keine in der Firewall:
+
+```swift
+let service = GatewayService(
+    configuration: GatewayConfiguration(port: 8080),
+    pipeline: pipeline,
+    downstream: StageDownstream(url: URL(string: "https://policy.internal/v1/decide")!),
+    rateGuard: RateGuard(policy: .on))
+```
+
+Die nächste Stufe bekommt die kanonische, **maskierte** Anfrage plus das Urteil
+der Firewall (Disposition, Risiko, Regel-IDs) — damit muss sie die Bewertung
+nicht wiederholen. Der Anzeigetext der Befunde geht nicht mit: er darf frei
+umformuliert werden, und eine Gegenstelle, die darauf prüft, bricht beim
+nächsten Textlauf.
 
 ### Mandanten trennen und cachen
 

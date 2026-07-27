@@ -48,6 +48,9 @@ public final class GatewayService: @unchecked Sendable {
     private let pipeline: GatewayPipeline
     private let downstream: Downstream
     private let principals: PrincipalResolver
+    /// Steht VOR der Pipeline: die Arbeit ist die Kosten, also muss der Deckel
+    /// greifen, bevor sie anfaellt. Ohne Guard laeuft alles wie bisher.
+    private let rateGuard: RateGuard?
     private let onAudit: (@Sendable (AuditEvent) -> Void)?
     private let onCompletion: (@Sendable (CompletionEvent) -> Void)?
     private var server: HTTPServer?
@@ -58,6 +61,7 @@ public final class GatewayService: @unchecked Sendable {
                            pipeline: GatewayPipeline,
                            client: UpstreamClient = UpstreamClient(),
                            principals: PrincipalResolver = AnonymousPrincipalResolver(),
+                           rateGuard: RateGuard? = nil,
                            onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                            onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.init(configuration: configuration,
@@ -68,6 +72,7 @@ public final class GatewayService: @unchecked Sendable {
                     apiKey: configuration.apiKey,
                     client: client),
                   principals: principals,
+                  rateGuard: rateGuard,
                   onAudit: onAudit,
                   onCompletion: onCompletion)
     }
@@ -83,12 +88,14 @@ public final class GatewayService: @unchecked Sendable {
                 pipeline: GatewayPipeline,
                 downstream: Downstream,
                 principals: PrincipalResolver = AnonymousPrincipalResolver(),
+                rateGuard: RateGuard? = nil,
                 onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                 onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
         self.configuration = configuration
         self.pipeline = pipeline
         self.downstream = downstream
         self.principals = principals
+        self.rateGuard = rateGuard
         self.onAudit = onAudit
         self.onCompletion = onCompletion
     }
@@ -103,9 +110,17 @@ public final class GatewayService: @unchecked Sendable {
         try server.start()
     }
 
-    public func stop() {
-        server?.stop()
+    /// Geordneter Stopp: kein Zulauf mehr, laufende Anfragen zu Ende.
+    ///
+    /// - Returns: `true`, wenn beim Ende nichts mehr lief. `false` heisst, dass
+    ///   die Frist abgelaufen ist, bevor alle Anfragen fertig waren — der
+    ///   Aufrufer soll das melden koennen, statt einen sauberen Stopp zu
+    ///   behaupten.
+    @discardableResult
+    public func stop(drainSeconds: TimeInterval = 0) -> Bool {
+        let drained = server?.stop(drainSeconds: drainSeconds) ?? true
         server = nil
+        return drained
     }
 
     // MARK: - Bearbeitung
@@ -143,6 +158,29 @@ public final class GatewayService: @unchecked Sendable {
             var payload: [String: Any] = ["error": "unauthenticated"]
             if configuration.debugErrorDetails { payload["detail"] = reason }
             return connection.respond(status: 401, json: payload)
+        }
+
+        // Der Deckel greift HIER: nach der Identitaet (vorher gibt es niemanden
+        // zu deckeln) und vor der Firewall (die Arbeit ist die Kosten). Die
+        // Absage geht denselben payload-freien Audit-Weg wie jede andere
+        // Entscheidung — eine Drosselung, die im Log fehlt, ist als
+        // Angriffsspur unsichtbar.
+        if let rateGuard, case .limited(let retryAfter) = await rateGuard.admit(principal) {
+            let correlationID = UUID().uuidString
+            let decision = GatewayDecision(
+                correlationID: correlationID, disposition: .block, riskScore: 1.0,
+                findings: [RateGuard.finding(retryAfter: retryAfter)], content: "")
+            onAudit?(AuditEvent(decision: decision, principal: principal, model: chat.model))
+            let body = (try? JSONSerialization.data(withJSONObject: [
+                "error": "rate limit exceeded",
+                "correlation_id": correlationID,
+            ], options: [.sortedKeys])) ?? Data()
+            // 429 statt 403: die Anfrage war nicht verboten, nur zu frueh. Der
+            // Unterschied ist fuer den Client handlungsleitend — auf 403 hoert
+            // ein vernuenftiger Client auf, auf 429 wartet er.
+            return connection.respond(status: 429, contentType: "application/json",
+                                      body: body,
+                                      extraHeaders: ["Retry-After": "\(Int(retryAfter))"])
         }
 
         let outcome = await pipeline.process(chat, principal: principal)

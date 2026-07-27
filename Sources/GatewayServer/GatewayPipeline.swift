@@ -436,6 +436,27 @@ public actor GatewayPipeline {
                            embedding: ticket.embedding, entities: ticket.entities)
     }
 
+    /// Zaehlerstand des Caches. `nil` ohne Cache — kein Cache und ein Cache
+    /// ohne Treffer sind verschiedene Aussagen, und die Metrik soll sie nicht
+    /// zu derselben Null verschmelzen.
+    public func cacheStatistics() async -> CacheStatistics? {
+        await cache?.statistics()
+    }
+
+    /// Wirft Cache-Eintraege einer Partition weg. Der Griff fuer entzogene
+    /// Berechtigungen — die Frist ist ein Zeitmass und hilft dort nicht.
+    @discardableResult
+    public func invalidateCache(partition: String) async -> Int {
+        await cache?.invalidate(partition: partition) ?? 0
+    }
+
+    /// Wirft Cache-Eintraege eines Modells weg. Der Griff fuer den
+    /// Versionswechsel.
+    @discardableResult
+    public func invalidateCache(model: String) async -> Int {
+        await cache?.invalidate(model: model) ?? 0
+    }
+
     // MARK: - Stabile Regel-IDs dieser Stufe
     //
     // Aenderungen brechen Suppressions und SIEM-Regeln.

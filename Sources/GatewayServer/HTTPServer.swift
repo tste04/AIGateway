@@ -142,6 +142,7 @@ public final class HTTPConnection: HTTPResponder, @unchecked Sendable {
         case 404: return "Not Found"
         case 413: return "Payload Too Large"
         case 422: return "Unprocessable Entity"
+        case 429: return "Too Many Requests"
         case 502: return "Bad Gateway"
         case 503: return "Service Unavailable"
         default: return "Error"
@@ -228,13 +229,39 @@ public final class HTTPServer: @unchecked Sendable {
         Thread.detachNewThread { [weak self] in self?.acceptLoop() }
     }
 
-    public func stop() {
+    /// Hoert sofort auf, Verbindungen anzunehmen.
+    ///
+    /// - Parameter drainSeconds: So lange wird auf laufende Anfragen gewartet.
+    ///   `0` beendet ohne Warten (das alte Verhalten). Der Unterschied ist
+    ///   nicht kosmetisch: eine Anfrage, die beim Abschalten mitten im
+    ///   Upstream-Aufruf steht, hat das Modell bereits bezahlt — sie
+    ///   abzuschneiden kostet Geld und liefert dem Client nichts. Deshalb erst
+    ///   den Zulauf schliessen, dann austrinken lassen.
+    ///
+    /// - Returns: `true`, wenn beim Ende nichts mehr lief.
+    @discardableResult
+    public func stop(drainSeconds: TimeInterval = 0) -> Bool {
         running = false
         if listenFD >= 0 {
             shutdown(listenFD, Int32(SHUT_RDWR))
             close(listenFD)
             listenFD = -1
         }
+        guard drainSeconds > 0 else { return activeConnectionCount() == 0 }
+
+        // Gepollt statt per Bedingungsvariable: das hier ist der Abschaltpfad,
+        // er laeuft genau einmal, und eine Sperrdisziplin mit Signalen waere
+        // mehr Zustand fuer weniger Verlaesslichkeit.
+        let deadline = Date().addingTimeInterval(drainSeconds)
+        while activeConnectionCount() > 0, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return activeConnectionCount() == 0
+    }
+
+    public func activeConnectionCount() -> Int {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return activeConnections
     }
 
     private func acceptLoop() {
