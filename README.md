@@ -1,5 +1,7 @@
 # AIGateway
 
+[![CI](https://github.com/tste04/AIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/tste04/AIGateway/actions/workflows/ci.yml)
+
 Eine Input Firewall in Swift: die Schicht zwischen Client und Sprachmodell, die
 prüft, was hineingeht. Deterministisch, netzfrei im Kern, ohne externe
 Abhängigkeiten außer `Foundation`.
@@ -245,6 +247,10 @@ swift build                  # alle drei Targets
 swift test                   # gesamte Suite
 swift build -c release
 ```
+
+Jeder Push und jeder Pull Request wird auf Ubuntu und macOS gebaut und
+getestet; beide Plattformen laufen, weil der Code für den Socket-Schreibpfad
+und für `FoundationNetworking` auf `canImport(Darwin)` verzweigt.
 
 Einzelne Tests:
 

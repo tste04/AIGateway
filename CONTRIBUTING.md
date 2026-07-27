@@ -32,8 +32,16 @@ title.
   (class) or
   `--filter InputFirewallTests.PIIRoundTripTests/testMaskThenUnmaskRestoresOriginal`
   (single test).
-- There is no linter, no CI configuration and no executable target — `GatewayService`
-  is started by a host program (example in the README).
+- CI builds and tests every push and pull request on Ubuntu and macOS
+  (`.github/workflows/ci.yml`). Both platforms run, because the code branches on
+  `canImport(Darwin)` for the socket write path and for `FoundationNetworking`;
+  one run leaves the other branch unchecked. A red run blocks a merge — the
+  suite is fast and needs no network, so there is no reason to tolerate one.
+- There is no linter and no executable target — `GatewayService` is started by a
+  host program (example in the README).
+- Tests must stay deterministic. Beware of reading anything Swift does not
+  promise to order: `Dictionary.first(where:)` reseeds per process and once made
+  a passing test into a coin flip that only CI caught.
 - The design rationale lives in [`docs/DECISIONS.md`](docs/DECISIONS.md). It is
   binding, not descriptive: changing a decision recorded there means amending that
   file with a reason and a date, in the same PR.
