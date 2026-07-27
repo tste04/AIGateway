@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Zwei Plattformen, weil der Code beide bedient: der HTTP-Server waehlt ueber
+# `#if canImport(Darwin)` zwischen write(2) und send(2) samt SO_NOSIGPIPE, und
+# `UpstreamClient` zwischen Foundation und FoundationNetworking. Ein Lauf allein
+# laesst genau diese Zweige ungeprueft.
+jobs:
+  linux:
+    name: Linux (Swift 5.10)
+    runs-on: ubuntu-latest
+    container: swift:5.10
+    steps:
+      - uses: actions/checkout@v4
+      # Der Container laeuft als root, der Checkout gehoert einem anderen
+      # Nutzer — ohne das bricht git mit "dubious ownership" ab.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Version
+        run: swift --version
+      - name: Build
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
+
+  macos:
+    name: macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        run: swift --version
+      - name: Build
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
