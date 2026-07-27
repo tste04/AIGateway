@@ -111,7 +111,11 @@ public struct ProviderDownstream: Downstream {
 /// Ereignis-Zerlegung ueber Chunk-Grenzen hinweg. Der Rueckruf kommt aus einem
 /// Hintergrund-Thread und `EventStreamParser` ist ein mutierender Wert —
 /// deshalb gekapselt und gesperrt.
-private final class EventState: @unchecked Sendable {
+///
+/// `internal` statt `private` aus demselben Grund wie `StageEventState`: was
+/// nur mit einem echten Netz-Strom erreichbar ist, bleibt ungetestet, und
+/// genau in dieser Schicht sassen die Streaming-Fehler.
+final class EventState: @unchecked Sendable {
 
     private var parser: EventStreamParser
     private var usage: TokenUsage?
