@@ -31,7 +31,8 @@ Output Guardrails sind nicht Teil davon.
   Rückweg. Kategorien: Person, Mail, Telefon, IBAN, Adresse, Ort sowie eigene
   Denylist-Begriffe.
 - **DLP** mit block/redact/allow je Regel — Redaktion entfernt die Fundstelle
-  und lässt die Anfrage durch, statt sie abzuweisen.
+  und lässt die Anfrage durch, statt sie abzuweisen. Der mitgelieferte Katalog
+  meldet Klassifizierungs-Vermerke nur und redigiert interne Adressen.
 - **Malware-Naht** auf Bytes (`PayloadScanner`), mit einer strukturellen Stufe
   ohne Signaturen: ausführbare Formate, behaupteter Typ gegen tatsächlichen
   Inhalt, ungeprüfte Archive, Größe.

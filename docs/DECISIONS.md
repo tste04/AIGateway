@@ -531,9 +531,22 @@ DLP läuft **nach** der Maskierung, sonst entfernte es Text, den die Klammer noc
 zurückübersetzen wollte. Provenienz gewichtet DLP nicht (Multiplikator 1.0),
 gleiche Begründung wie bei PII.
 
-Der mitgelieferte Katalog ist bewusst klein (Klassifizierungs-Vermerke,
-interne URLs): echte DLP-Regeln sind organisationsspezifisch und gehören in
-die Konfiguration.
+Der mitgelieferte Katalog ist bewusst klein — echte DLP-Regeln sind
+organisationsspezifisch und gehören in die Konfiguration. Seine zwei Klassen
+haben aus gutem Grund **unterschiedliche** Default-Handlungen, und der
+Unterschied ist die eigentliche Lehre aus dieser Stufe: Der
+Klassifizierungs-Vermerk (DLP-001/002) wird nur **beobachtet**, denn der
+Vermerk ist nicht das Geheimnis — das Dokument ist es. Ihn zu redigieren
+entfernte genau das Wort, das den Betreiber gewarnt hätte, und ließe den
+Inhalt unverändert ziehen: Redaktionstheater. Ihn zu blocken wäre umgekehrt
+eine Zumutung, weil „vertraulich" auch in harmlosen Sätzen steht. Die interne
+Adresse (DLP-003) wird dagegen **redigiert**, weil dort die Fundstelle selbst
+der Verlust ist — ein Hostname verrät Topologie, und ihn zu entfernen behebt
+den Schaden wirklich.
+
+Daraus die Faustregel für jede weitere Regel: `redact` ist richtig, wenn die
+Fundstelle der Schaden ist; ist sie nur sein Anzeiger, gehört sie in den
+Audit, nicht in den Papierkorb.
 
 **Malware ist eine Naht, keine Engine.** Signaturen zu pflegen ist eine eigene
 Industrie; ein selbstgebauter Scanner wäre dasselbe Fehlurteil wie ein

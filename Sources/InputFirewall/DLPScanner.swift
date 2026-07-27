@@ -143,25 +143,33 @@ public struct DLPScanner: ContentScanner {
 
     // MARK: - Katalog
 
-    /// Klassifizierungs-Vermerke. Das ist die einzige Regelklasse, die
-    /// organisationsuebergreifend genug ist, um voreingestellt zu sein: wer
-    /// ein Dokument als vertraulich markiert, hat die Entscheidung schon
-    /// getroffen — sie muss nur durchgesetzt werden.
+    /// Der mitgelieferte Katalog. Zwei Regelklassen, und sie haben aus gutem
+    /// Grund UNTERSCHIEDLICHE Default-Handlungen.
     ///
-    /// Default-Handlung ist `redact`, nicht `block`: der Vermerk selbst ist
-    /// selten das Geheimnis, und eine Anfrage daran scheitern zu lassen,
-    /// erzeugt nur Umgehung.
+    /// **Klassifizierungs-Vermerke (DLP-001/002) beobachten nur.** Der Vermerk
+    /// ist nicht das Geheimnis — das Dokument ist es. Ihn wegzuredigieren
+    /// entfernt genau das Wort, das den Betreiber gewarnt haette, und laesst
+    /// den Inhalt unveraendert ziehen; das waere Redaktionstheater. Ihn zu
+    /// blocken waere umgekehrt eine Zumutung, weil „vertraulich" auch in
+    /// harmlosen Saetzen steht. Also `allow`: der Befund steht im Audit, und
+    /// wer sieht, dass in seiner Organisation markierte Dokumente ans Modell
+    /// gehen, stellt die Regel selbst auf `block`.
+    ///
+    /// **Interne Adressen (DLP-003) werden redigiert**, denn dort IST die
+    /// Fundstelle der Verlust: ein Hostname verraet interne Topologie, und
+    /// entfernt man ihn, ist der Schaden tatsaechlich behoben.
+    ///
+    /// Der Katalog ist bewusst klein: echte DLP-Regeln sind
+    /// organisationsspezifisch und gehoeren in die Konfiguration.
     public static let defaultRules: [DLPRule] = [
-        DLPRule(id: "DLP-001", action: .redact, severity: .high,
+        DLPRule(id: "DLP-001", action: .allow, severity: .high,
                 message: "classification marker (de)",
                 pattern: #"\b(streng\s+geheim|vertraulich|nur\s+f(ue|ü)r\s+den\s+internen\s+gebrauch|"#
-                    + #"betriebsgeheimnis|verschlusssache)\b"#,
-                replacement: "[VERTRAULICH]"),
-        DLPRule(id: "DLP-002", action: .redact, severity: .high,
+                    + #"betriebsgeheimnis|verschlusssache)\b"#),
+        DLPRule(id: "DLP-002", action: .allow, severity: .high,
                 message: "classification marker (en)",
                 pattern: #"\b(strictly\s+confidential|confidential|internal\s+use\s+only|"#
-                    + #"trade\s+secret|proprietary\s+and\s+confidential)\b"#,
-                replacement: "[CONFIDENTIAL]"),
+                    + #"trade\s+secret|proprietary\s+and\s+confidential)\b"#),
         DLPRule(id: "DLP-003", action: .redact, severity: .medium,
                 message: "internal URL or host",
                 pattern: #"\bhttps?://[A-Za-z0-9.-]*\.(intern|internal|local|lan|corp)\b[^\s]*"#,
