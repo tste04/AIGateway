@@ -355,6 +355,131 @@ final class SemanticCacheTests: XCTestCase {
     }
 }
 
+// MARK: - Malware und DLP im Ablauf
+
+final class MalwareAndDLPPipelineTests: XCTestCase {
+
+    private func makePipeline(malware: PayloadScanner? = nil,
+                              dlp: DLPScanner? = nil,
+                              pii: Bool = false) -> GatewayPipeline {
+        var policy = GatewayPolicy.standard
+        policy.stageBudgetMilliseconds = 10_000
+        return GatewayPipeline(
+            pii: pii ? PIIGate(policy: .gatewayDefault, baseDirectory: nil) : nil,
+            malware: malware, dlp: dlp, policy: policy)
+    }
+
+    private func request(_ text: String = "Bitte pruefen.",
+                         attachments: [Attachment] = []) -> ChatRequest {
+        ChatRequest(model: "m", messages: [ChatMessage(role: .user, content: text)],
+                    attachments: attachments)
+    }
+
+    private func executable() -> Attachment {
+        Attachment(name: "rechnung.pdf", mediaType: "application/pdf",
+                   bytes: Data([0x4D, 0x5A] + [UInt8](repeating: 0x41, count: 16)))
+    }
+
+    // MARK: Malware
+
+    func testExecutableAttachmentBlocksTheRequest() async {
+        let pipeline = makePipeline(malware: StructuralPayloadScanner())
+        let outcome = await pipeline.process(request(attachments: [executable()]),
+                                             principal: .anonymous)
+        XCTAssertEqual(outcome.decision.disposition, .block)
+        XCTAssertNil(outcome.forward)
+        XCTAssertTrue(outcome.decision.findings.contains { $0.ruleID == "MAL-001" })
+    }
+
+    func testMalwareRunsBeforeInjection() async {
+        // Reihenfolge nach DECISIONS: Anhaenge werden geprueft, BEVOR
+        // irgendetwas Inhalt parst. Sichtbar daran, dass nur die
+        // Malware-Stufe eine Laufzeit gemeldet hat.
+        let pipeline = makePipeline(malware: StructuralPayloadScanner())
+        let outcome = await pipeline.process(request(attachments: [executable()]),
+                                             principal: .anonymous)
+        XCTAssertEqual(outcome.decision.timings.map(\.stage), ["malware"])
+    }
+
+    func testCleanAttachmentPassesThrough() async {
+        let png = Attachment(name: "bild.png", mediaType: "image/png",
+                             bytes: Data([0x89, 0x50, 0x4E, 0x47] + [UInt8](repeating: 0, count: 12)))
+        let pipeline = makePipeline(malware: StructuralPayloadScanner())
+        let outcome = await pipeline.process(request(attachments: [png]), principal: .anonymous)
+        XCTAssertNotEqual(outcome.decision.disposition, .block)
+        XCTAssertEqual(outcome.forward?.attachments.count, 1)
+    }
+
+    func testAttachmentsCountTowardsTheSizeGuard() async {
+        // Ohne das passierte ein 100-MB-Bild den Guard, weil es kein Text ist.
+        var policy = GatewayPolicy.standard
+        policy.maxInputBytes = 100
+        let pipeline = GatewayPipeline(policy: policy)
+        let big = Attachment(bytes: Data(repeating: 0x41, count: 500))
+        let outcome = await pipeline.process(request(attachments: [big]), principal: .anonymous)
+
+        XCTAssertEqual(outcome.decision.disposition, .block)
+        XCTAssertTrue(outcome.decision.findings.contains { $0.ruleID == "GW-001" })
+    }
+
+    func testWithoutAScannerAttachmentsAreNotInspected() async {
+        // Ehrlichkeit ueber die Grenze: ohne konfigurierte Stufe wird nicht
+        // geprueft — und nichts behauptet.
+        let pipeline = makePipeline()
+        let outcome = await pipeline.process(request(attachments: [executable()]),
+                                             principal: .anonymous)
+        XCTAssertNotEqual(outcome.decision.disposition, .block)
+    }
+
+    // MARK: DLP
+
+    func testDLPRedactsAndForwards() async {
+        let rule = DLPRule(id: "DLP-900", action: .redact, message: "codename",
+                           pattern: #"\bNordlicht\b"#, replacement: "[REDACTED]")!
+        let pipeline = makePipeline(dlp: DLPScanner(rules: [rule]))
+        let outcome = await pipeline.process(request("Projekt Nordlicht laeuft."),
+                                             principal: .anonymous)
+
+        XCTAssertEqual(outcome.decision.disposition, .allowModified)
+        XCTAssertFalse(outcome.forward?.scannableText.contains("Nordlicht") ?? true)
+        XCTAssertTrue(outcome.forward?.scannableText.contains("[REDACTED]") ?? false)
+    }
+
+    func testDLPBlockStopsTheRequest() async {
+        let rule = DLPRule(id: "DLP-901", action: .block, message: "codename",
+                           pattern: #"\bNordlicht\b"#)!
+        let pipeline = makePipeline(dlp: DLPScanner(rules: [rule]))
+        let outcome = await pipeline.process(request("Projekt Nordlicht laeuft."),
+                                             principal: .anonymous)
+        XCTAssertEqual(outcome.decision.disposition, .block)
+        XCTAssertNil(outcome.forward)
+    }
+
+    func testDLPRunsAfterPIIMasking() async {
+        // Die Redaktion ist einweg. Liefe sie vor der Maskierung, entfernte sie
+        // Text, den die Klammer noch zurueckuebersetzen wollte.
+        let rule = DLPRule(id: "DLP-902", action: .redact, message: "codename",
+                           pattern: #"\bNordlicht\b"#)!
+        let pipeline = makePipeline(dlp: DLPScanner(rules: [rule]), pii: true)
+        let outcome = await pipeline.process(
+            request("Frau Anna Schmidt zu Projekt Nordlicht."), principal: .anonymous)
+
+        XCTAssertEqual(outcome.decision.timings.map(\.stage), ["injection", "pii", "dlp"])
+        // Die Person ist maskiert UND rueckuebersetzbar, das Codewort ist weg.
+        XCTAssertEqual(outcome.session.unmask("[Person-1]"), "Anna Schmidt")
+        XCTAssertFalse(outcome.forward?.scannableText.contains("Nordlicht") ?? true)
+    }
+
+    func testQuietRequestPassesBothStages() async {
+        let pipeline = makePipeline(malware: StructuralPayloadScanner(),
+                                    dlp: DLPScanner())
+        let outcome = await pipeline.process(request("Wie ist das Wetter?"),
+                                             principal: .anonymous)
+        XCTAssertEqual(outcome.decision.disposition, .allow)
+        XCTAssertTrue(outcome.decision.findings.isEmpty)
+    }
+}
+
 // MARK: - Quarantaene im Pipeline-Pfad
 
 final class PipelineQuarantineTests: XCTestCase {

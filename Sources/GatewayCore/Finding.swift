@@ -82,8 +82,8 @@ public struct ScanResult: Sendable, Codable, Equatable {
 
 /// Naht fuer alle textbasierten Firewall-Stufen (Injection, PII, DLP).
 ///
-/// Malware arbeitet auf Bytes und bekommt spaeter eine eigene Naht
-/// (`PayloadScanner`) — ein `String` waere dort das falsche Modell.
+/// Malware arbeitet auf Bytes und hat eine eigene Naht (`PayloadScanner`) —
+/// ein `String` waere dort das falsche Modell.
 public protocol ContentScanner: Sendable {
     /// Stabiler Name der Stufe, erscheint in `StageTiming`.
     var stageName: String { get }
@@ -92,4 +92,27 @@ public protocol ContentScanner: Sendable {
     /// Rein synchrone Scanner erfuellen die Anforderung unveraendert — Swift laesst
     /// eine sync-Funktion eine async-Anforderung bezeugen.
     func scan(_ content: String, trust: SourceTrust) async -> ScanResult
+}
+
+/// Naht fuer Stufen, die auf BYTES arbeiten — heute Malware.
+///
+/// Getrennt von `ContentScanner`, weil ein `String` das falsche Modell waere:
+/// ein Anhang ist nicht notwendig Text, und ihn dafuer zu dekodieren hiesse,
+/// ihn zu parsen, bevor er geprueft wurde. Genau das soll die Stufe
+/// verhindern — sie steht im Ablauf VOR allem anderen.
+///
+/// Das Ergebnis ist bewusst wieder `ScanResult`, damit `GatewayPolicy` nur
+/// EINEN Entscheidungsweg kennt. `content` bleibt dabei leer und `wasModified`
+/// falsch: ein Byte-Scanner erkennt und bereinigt nicht — er kann einen Anhang
+/// nur ganz durchlassen oder die Anfrage kippen.
+public protocol PayloadScanner: Sendable {
+    var stageName: String { get }
+
+    /// - Parameters:
+    ///   - name: Dateiname, falls bekannt. Nur ein Hinweis — er ist
+    ///     Angreifer-kontrolliert und darf nie allein entscheiden.
+    ///   - mediaType: der BEHAUPTETE Typ. Ebenfalls Angreifer-kontrolliert;
+    ///     sein Wert liegt darin, ihn gegen den tatsaechlichen Inhalt zu
+    ///     pruefen.
+    func scan(_ bytes: Data, name: String?, mediaType: String?) async -> ScanResult
 }

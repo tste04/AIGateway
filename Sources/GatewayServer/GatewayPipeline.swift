@@ -56,6 +56,13 @@ public actor GatewayPipeline {
 
     private let injection: InjectionScanner
     private let pii: PIIGate?
+    /// Stufe 3 im Ablauf — VOR der Injection-Stufe, weil ein Anhang geprueft
+    /// sein soll, bevor irgendetwas ihn parst.
+    private let malware: PayloadScanner?
+    /// Stufe 6 — nach der PII-Maskierung. Ihre Redaktion ist EINWEG; sie darf
+    /// deshalb nicht vor der Maskierung laufen, sonst entfernt sie Text, den
+    /// die Klammer noch zurueckuebersetzen wollte.
+    private let dlp: DLPScanner?
     private let policy: GatewayPolicy
     private let cache: SemanticCache?
     private let embedder: Embedder?
@@ -76,6 +83,8 @@ public actor GatewayPipeline {
 
     public init(injection: InjectionScanner = InjectionScanner(),
                 pii: PIIGate? = nil,
+                malware: PayloadScanner? = nil,
+                dlp: DLPScanner? = nil,
                 policy: GatewayPolicy = .standard,
                 cache: SemanticCache? = nil,
                 embedder: Embedder? = nil,
@@ -83,6 +92,8 @@ public actor GatewayPipeline {
                 quarantine: Quarantine? = nil) {
         self.injection = injection
         self.pii = pii
+        self.malware = malware
+        self.dlp = dlp
         self.policy = policy
         self.cache = cache
         self.embedder = embedder
@@ -122,7 +133,10 @@ public actor GatewayPipeline {
         // deckelt die Textmenge, die Stueckzahl-Grenze die Anzahl der
         // Scanner-Laeufe — 100.000 Kleinst-Nachrichten reissen die Byte-Grenze
         // nicht, kosten aber 100.000 Regelwerks-Durchgaenge.
+        // Anhaenge zaehlen mit: sonst passierte ein 100-MB-Bild den Guard, weil
+        // es kein Text ist.
         let payloadBytes = request.scannableText.utf8.count
+            + request.attachments.reduce(0) { $0 + $1.bytes.count }
         if payloadBytes > policy.maxInputBytes {
             let finding = Finding(
                 ruleID: Self.ruleOversizedInput, category: .anomaly, severity: .high, weight: 1.0,
@@ -140,7 +154,37 @@ public actor GatewayPipeline {
                                  content: "", timings: [], bytes: payloadBytes)
         }
 
-        // Stufe 2 — Injection, je Nachricht mit rollenabhaengiger Provenienz.
+        // Stufe 3 — Malware, VOR allem, was Inhalt parst. Ein Anhang, der nicht
+        // durchgelassen wird, soll auch nicht dekodiert worden sein.
+        if let malware, !request.attachments.isEmpty {
+            let malwareStart = DispatchTime.now().uptimeNanoseconds
+            var malwareRisk = 0.0
+            for attachment in request.attachments {
+                let result = await malware.scan(attachment.bytes,
+                                                name: attachment.name,
+                                                mediaType: attachment.mediaType)
+                findings += result.findings
+                malwareRisk = max(malwareRisk, policy.disposition(for: result).1)
+            }
+            worstRisk = max(worstRisk, malwareRisk)
+            timings.append(budgetTiming(malware.stageName, since: malwareStart))
+
+            if worstRisk >= policy.blockThreshold {
+                return await blocked(correlationID: correlationID, principal: principal,
+                                     model: request.model, findings: findings, risk: worstRisk,
+                                     content: request.scannableText, timings: timings,
+                                     bytes: payloadBytes)
+            }
+            if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
+                findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
+                return await blocked(correlationID: correlationID, principal: principal,
+                                     model: request.model, findings: findings, risk: 1.0,
+                                     content: request.scannableText, timings: timings,
+                                     bytes: payloadBytes)
+            }
+        }
+
+        // Stufe 4 — Injection, je Nachricht mit rollenabhaengiger Provenienz.
         //
         // Der bereinigte Text der Stufe wird UEBERNOMMEN. Die Sanitisierung
         // entfernt genau die Zeichen, mit denen Anweisungen getarnt werden; sie
@@ -227,7 +271,38 @@ public actor GatewayPipeline {
             }
         }
 
-        // Platz fuer Stufe 4 (DLP-Policy).
+        // Stufe 6 — DLP. NACH der Maskierung: die Redaktion ist einweg, und was
+        // die Klammer noch zurueckuebersetzen will, darf sie nicht vorher
+        // entfernen.
+        if let dlp {
+            let dlpStart = DispatchTime.now().uptimeNanoseconds
+            var cleaned: [ChatMessage] = []
+            var dlpRisk = 0.0
+            for message in forwarded.messages {
+                let result = dlp.scan(message.content, trust: Self.trust(for: message.role))
+                findings += result.findings
+                dlpRisk = max(dlpRisk, policy.disposition(for: result).1)
+                wasModified = wasModified || result.wasModified
+                cleaned.append(ChatMessage(role: message.role, content: result.content))
+            }
+            forwarded.messages = cleaned
+            worstRisk = max(worstRisk, dlpRisk)
+            timings.append(budgetTiming(dlp.stageName, since: dlpStart))
+
+            if worstRisk >= policy.blockThreshold {
+                return await blocked(correlationID: correlationID, principal: principal,
+                                     model: request.model, findings: findings, risk: worstRisk,
+                                     content: request.scannableText, timings: timings,
+                                     bytes: payloadBytes)
+            }
+            if let timing = timings.last, timing.timedOut, policy.failureMode == .failClosed {
+                findings.append(Self.budgetFinding(timing, budget: policy.stageBudgetMilliseconds))
+                return await blocked(correlationID: correlationID, principal: principal,
+                                     model: request.model, findings: findings, risk: 1.0,
+                                     content: request.scannableText, timings: timings,
+                                     bytes: payloadBytes)
+            }
+        }
 
         // Stufe 5 — Semantic-Cache-Lookup. HIER und nirgends sonst: nach der
         // Firewall (sonst waere der Cache mit vergifteten Prompts befuellbar

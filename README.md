@@ -30,6 +30,11 @@ Output Guardrails sind nicht Teil davon.
 - **PII-Maskierung mit Round-Trip**: Maskierung auf dem Hinweg, Klardaten auf dem
   Rückweg. Kategorien: Person, Mail, Telefon, IBAN, Adresse, Ort sowie eigene
   Denylist-Begriffe.
+- **DLP** mit block/redact/allow je Regel — Redaktion entfernt die Fundstelle
+  und lässt die Anfrage durch, statt sie abzuweisen.
+- **Malware-Naht** auf Bytes (`PayloadScanner`), mit einer strukturellen Stufe
+  ohne Signaturen: ausführbare Formate, behaupteter Typ gegen tatsächlichen
+  Inhalt, ungeprüfte Archive, Größe.
 - **Provenienz je Nachrichtenrolle**: `system` gilt als vertrauenswürdig,
   `user`/`assistant` als neutral, `tool` als fremd.
 - **Payload-freie Audit-Einträge** mit stabilen Regel-IDs, dazu ein getrenntes

@@ -121,10 +121,26 @@ enum JSONHelper {
         return ""
     }
 
-    static func messages(from raw: Any?) -> [ChatMessage] {
+    /// Traegt der Inhalt Bloecke, die `flattenContent` nicht abbildet?
+    ///
+    /// Bilder und andere Binaerbloecke sind genau der Fall: sie verschwaenden
+    /// beim Flachklopfen spurlos. Ein still verworfener Bildanhang ist
+    /// dieselbe Fehlerklasse wie ein still entferntes `tools` — der Aufrufer
+    /// bekaeme eine Antwort auf eine ANDERE Anfrage als die gestellte.
+    static func carriesNonTextBlocks(_ value: Any?) -> Bool {
+        guard let blocks = value as? [[String: Any]] else { return false }
+        return blocks.contains { $0["text"] == nil }
+    }
+
+    static func messages(from raw: Any?) throws -> [ChatMessage] {
         guard let array = raw as? [[String: Any]] else { return [] }
-        return array.compactMap { entry in
+        return try array.compactMap { entry in
             guard let roleRaw = entry["role"] as? String else { return nil }
+            guard !carriesNonTextBlocks(entry["content"]) else {
+                throw GatewayServerError.unsupported(
+                    "this gateway forwards text only; it does not yet carry binary content "
+                    + "blocks and refuses to silently drop them")
+            }
             let role = ChatMessage.Role(rawValue: roleRaw) ?? .user
             return ChatMessage(role: role, content: flattenContent(entry["content"]))
         }
@@ -147,7 +163,7 @@ public struct OpenAIAdapter: ProviderAdapter {
         guard let model = dict["model"] as? String else {
             throw GatewayServerError.malformedRequest("missing 'model'")
         }
-        let messages = JSONHelper.messages(from: dict["messages"])
+        let messages = try JSONHelper.messages(from: dict["messages"])
         guard !messages.isEmpty else {
             throw GatewayServerError.malformedRequest("missing 'messages'")
         }
@@ -273,7 +289,7 @@ public struct AnthropicAdapter: ProviderAdapter {
         // zur ersten Nachricht, damit die Firewall sie ueberhaupt sieht.
         let system = JSONHelper.flattenContent(dict["system"])
         if !system.isEmpty { messages.append(ChatMessage(role: .system, content: system)) }
-        messages += JSONHelper.messages(from: dict["messages"])
+        messages += try JSONHelper.messages(from: dict["messages"])
         guard messages.contains(where: { $0.role != .system }) else {
             throw GatewayServerError.malformedRequest("missing 'messages'")
         }
@@ -401,7 +417,7 @@ public struct OllamaAdapter: ProviderAdapter {
         guard let model = dict["model"] as? String else {
             throw GatewayServerError.malformedRequest("missing 'model'")
         }
-        let messages = JSONHelper.messages(from: dict["messages"])
+        let messages = try JSONHelper.messages(from: dict["messages"])
         guard !messages.isEmpty else {
             throw GatewayServerError.malformedRequest("missing 'messages'")
         }

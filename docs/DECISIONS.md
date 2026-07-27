@@ -515,14 +515,47 @@ durch — abgelaufene Vorfälle sind nicht mehr lesbar. Wer die Beispiele über
 einen Neustart hinaus braucht, schreibt eine eigene Senke und trifft damit
 ausdrücklich die Entscheidung, Nutzinhalt dauerhaft abzulegen.
 
-### Malware braucht erst eine Angriffsfläche (Vorbedingung für Rang 7)
+### DLP und Malware (Juli 2026, umgesetzt)
 
-`ChatRequest` kennt nur Text; die Adapter flachen auch Block-Arrays zu Text ab.
-Es gibt keine Anhänge — der Malware-Scan ist also nicht „noch nicht gebaut",
-sondern hat nichts, woran er ansetzen könnte. Vor Rang 7 braucht es eine
-Anhang-Repräsentation im kanonischen Modell und die `PayloadScanner`-Naht auf
-Bytes; `ContentScanner` arbeitet auf `String` und ist dort das falsche Modell.
-Im Ablauf steht Malware **vor** der Injection-Stufe (Schritt 3), nicht daneben.
+**DLP unterscheidet sich von einer weiteren Regelliste durch die Handlung**,
+nicht durch das Regelwerk: `block` / `redact` / `allow`. `redact` ist der
+eigentliche Punkt — wer nur blocken kann, zwingt jede Organisation zu „ganz
+oder gar nicht" und bekommt Regeln, die niemand scharf schaltet. `allow` ist
+der Weg, eine Regel zu beobachten, bevor man sie scharf stellt.
+
+Unterschied zur PII-Maskierung, der leicht übersehen wird: **Maskierung ist
+eine Klammer, Redaktion ist einweg.** Was DLP entfernt, kommt auf dem Rückweg
+nicht wieder — bei PII geht es um Datensparsamkeit gegenüber dem Provider, bei
+DLP um Inhalte, die das Haus nicht verlassen dürfen. Daraus folgt die Position:
+DLP läuft **nach** der Maskierung, sonst entfernte es Text, den die Klammer noch
+zurückübersetzen wollte. Provenienz gewichtet DLP nicht (Multiplikator 1.0),
+gleiche Begründung wie bei PII.
+
+Der mitgelieferte Katalog ist bewusst klein (Klassifizierungs-Vermerke,
+interne URLs): echte DLP-Regeln sind organisationsspezifisch und gehören in
+die Konfiguration.
+
+**Malware ist eine Naht, keine Engine.** Signaturen zu pflegen ist eine eigene
+Industrie; ein selbstgebauter Scanner wäre dasselbe Fehlurteil wie ein
+selbstgebauter TLS-Stack. `PayloadScanner` arbeitet auf Bytes — ein `String`
+wäre falsch, weil ein Anhang dafür dekodiert werden müsste, bevor er geprüft
+ist. Genau das verhindert die Position im Ablauf: **Stufe 3, vor allem, was
+Inhalt parst.**
+
+`StructuralPayloadScanner` ist die abhängigkeitsfreie erste Schicht ohne
+Signaturen: ausführbare Formate (`MAL-001`), behaupteter Typ gegen
+tatsächlichen Inhalt (`MAL-002`), ungeprüfte Archive (`MAL-003`, kein Verstoß
+sondern eine sichtbar gemachte Wissenslücke) und Größe (`MAL-004`). Dateiname
+und Medientyp sind angreifer-kontrolliert und werden nie geglaubt, sondern nur
+gegen den Inhalt geprüft.
+
+**Grenze, die benannt gehört:** `ChatRequest.attachments` wird von den
+HTTP-Adaptern nicht befüllt. Die Dialekte tragen Bilder in Inhaltsblöcken, und
+die weiterzureichen wäre echte Multimodalität, die dieses Repo nicht baut.
+Statt sie still fallen zu lassen — dieselbe Fehlerklasse wie ein still
+entferntes `tools` — **weisen die Adapter solche Anfragen ab.** Wer die
+Bibliothek direkt benutzt, füllt das Feld selbst und bekommt damit die
+Malware-Stufe. Anhänge zählen in den Größen-Guard mit.
 
 ## Bekannte Lücken (bewusst offen)
 
@@ -545,8 +578,8 @@ Pseudonymisierung ergänzt Datenminimierung, sie ersetzt sie nicht.
 | 3 | Injection-Nachschärfung (Normalisierung, DE-Regeln) | **fertig** |
 | 4 | `GatewayServer` (HTTP + SSE, 3 Provider-Adapter) | **fertig** |
 | 5 | Semantic Cache | **nutzbar** — exakt + semantisch, partitioniert; Persistenz, Kennzahlen und Invalidierung offen |
-| 6 | DLP-Policy-Semantik | offen |
-| 7 | Malware (ClamAV-Naht) | offen — Anhang-Naht fehlt |
+| 6 | DLP-Policy-Semantik | **fertig** — block/redact/allow |
+| 7 | Malware (ClamAV-Naht) | **Naht fertig** — strukturelle Stufe gebaut, Engine ist Betreibersache |
 
 Die Ränge sind Feature-Boxen. Die Nähte laufen quer dazu und haben eine eigene
 Reihenfolge:
