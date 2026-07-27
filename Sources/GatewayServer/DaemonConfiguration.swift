@@ -101,157 +101,182 @@ public struct DaemonConfiguration: Sendable {
 
     public static func parse(_ data: Data,
                              environment: [String: String] = [:]) throws -> DaemonConfiguration {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let rootObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ConfigurationError.malformed("top level is not a JSON object")
         }
-        try reject(unknownIn: root, section: "root",
-                   allowed: ["server", "policy", "stages", "cache", "rateLimit",
-                             "quarantine", "maskingSessions", "nextStage", "drainSeconds"])
-
         var config = DaemonConfiguration()
+        var root = Section(name: "root", values: rootObject)
 
-        if let server = try section(root, "server") {
-            try reject(unknownIn: server, section: "server",
-                       allowed: ["port", "loopbackOnly", "upstream", "upstreamBaseURL",
-                                 "maxBodyBytes", "debugErrorDetails"])
-            if let port = server["port"] as? Int {
+        if var server = try root.subsection("server") {
+            if let port = server.int("port") {
                 guard (1...65_535).contains(port) else {
                     throw ConfigurationError.badValue("server.port", "outside 1...65535")
                 }
                 config.gateway.port = UInt16(port)
             }
-            if let loopback = server["loopbackOnly"] as? Bool { config.gateway.loopbackOnly = loopback }
-            if let name = server["upstream"] as? String {
+            if let loopback = server.bool("loopbackOnly") { config.gateway.loopbackOnly = loopback }
+            if let name = server.string("upstream") {
                 guard let kind = ProviderKind(rawValue: name) else {
                     throw ConfigurationError.badValue("server.upstream", "unknown provider '\(name)'")
                 }
                 config.gateway.upstream = kind
             }
-            if let raw = server["upstreamBaseURL"] as? String {
+            if let raw = server.string("upstreamBaseURL") {
                 guard let url = URL(string: raw) else {
                     throw ConfigurationError.badValue("server.upstreamBaseURL", "not a URL")
                 }
                 config.gateway.upstreamBaseURL = url
             }
-            if let bytes = server["maxBodyBytes"] as? Int { config.gateway.maxBodyBytes = bytes }
-            if let debug = server["debugErrorDetails"] as? Bool {
-                config.gateway.debugErrorDetails = debug
-            }
+            if let bytes = server.int("maxBodyBytes") { config.gateway.maxBodyBytes = bytes }
+            if let debug = server.bool("debugErrorDetails") { config.gateway.debugErrorDetails = debug }
+            try server.finish()
         }
 
         // Der Schluessel kommt ausschliesslich aus der Umgebung — siehe
-        // Kopfkommentar, Festlegung 1.
+        // Kopfkommentar, Festlegung 1. Ein `apiKey` in der Datei faellt als
+        // unbekannter Schluessel durch, wie jeder andere auch.
         config.gateway.apiKey = environment["AIGATEWAY_UPSTREAM_API_KEY"]
 
-        if let policy = try section(root, "policy") {
-            try reject(unknownIn: policy, section: "policy",
-                       allowed: ["blockThreshold", "maxInputBytes", "maxMessages",
-                                 "stageBudgetMilliseconds", "failClosed"])
-            if let threshold = policy["blockThreshold"] as? Double {
-                config.policy.blockThreshold = threshold
+        if var policy = try root.subsection("policy") {
+            if let value = policy.double("blockThreshold") { config.policy.blockThreshold = value }
+            if let value = policy.int("maxInputBytes") { config.policy.maxInputBytes = value }
+            if let value = policy.int("maxMessages") { config.policy.maxMessages = value }
+            if let value = policy.double("stageBudgetMilliseconds") {
+                config.policy.stageBudgetMilliseconds = value
             }
-            if let bytes = policy["maxInputBytes"] as? Int { config.policy.maxInputBytes = bytes }
-            if let count = policy["maxMessages"] as? Int { config.policy.maxMessages = count }
-            if let budget = policy["stageBudgetMilliseconds"] as? Double {
-                config.policy.stageBudgetMilliseconds = budget
+            if let value = policy.bool("failClosed") {
+                config.policy.failureMode = value ? .failClosed : .failOpen
             }
-            if let failClosed = policy["failClosed"] as? Bool {
-                config.policy.failureMode = failClosed ? .failClosed : .failOpen
-            }
+            try policy.finish()
         }
 
-        if let stages = try section(root, "stages") {
-            try reject(unknownIn: stages, section: "stages", allowed: ["pii", "dlp", "malware"])
-            if let value = stages["pii"] as? Bool { config.pii = value }
-            if let value = stages["dlp"] as? Bool { config.dlp = value }
-            if let value = stages["malware"] as? Bool { config.malware = value }
+        if var stages = try root.subsection("stages") {
+            if let value = stages.bool("pii") { config.pii = value }
+            if let value = stages.bool("dlp") { config.dlp = value }
+            if let value = stages.bool("malware") { config.malware = value }
+            try stages.finish()
         }
 
-        if let cache = try section(root, "cache") {
-            try reject(unknownIn: cache, section: "cache",
-                       allowed: ["enabled", "timeToLive", "maxEntries", "maxEntriesPerPartition",
-                                 "similarityThreshold", "maxTemperature"])
-            if let value = cache["enabled"] as? Bool { config.cache.enabled = value }
-            if let value = cache["timeToLive"] as? Double { config.cache.timeToLive = value }
-            if let value = cache["maxEntries"] as? Int { config.cache.maxEntries = value }
-            if let value = cache["maxEntriesPerPartition"] as? Int {
+        if var cache = try root.subsection("cache") {
+            if let value = cache.bool("enabled") { config.cache.enabled = value }
+            if let value = cache.double("timeToLive") { config.cache.timeToLive = value }
+            if let value = cache.int("maxEntries") { config.cache.maxEntries = value }
+            if let value = cache.int("maxEntriesPerPartition") {
                 config.cache.maxEntriesPerPartition = value
             }
-            if let value = cache["similarityThreshold"] as? Double {
+            if let value = cache.double("similarityThreshold") {
                 config.cache.similarityThreshold = value
             }
-            if let value = cache["maxTemperature"] as? Double { config.cache.maxTemperature = value }
+            if let value = cache.double("maxTemperature") { config.cache.maxTemperature = value }
+            try cache.finish()
         }
 
-        if let limit = try section(root, "rateLimit") {
-            try reject(unknownIn: limit, section: "rateLimit",
-                       allowed: ["enabled", "requestsPerInterval", "interval", "burst",
-                                 "maxTrackedSubjects"])
-            if let value = limit["enabled"] as? Bool { config.rateLimit.enabled = value }
-            if let value = limit["requestsPerInterval"] as? Int {
+        if var limit = try root.subsection("rateLimit") {
+            if let value = limit.bool("enabled") { config.rateLimit.enabled = value }
+            if let value = limit.int("requestsPerInterval") {
                 config.rateLimit.requestsPerInterval = value
             }
-            if let value = limit["interval"] as? Double { config.rateLimit.interval = value }
-            if let value = limit["burst"] as? Int { config.rateLimit.burst = value }
-            if let value = limit["maxTrackedSubjects"] as? Int {
+            if let value = limit.double("interval") { config.rateLimit.interval = value }
+            if let value = limit.int("burst") { config.rateLimit.burst = value }
+            if let value = limit.int("maxTrackedSubjects") {
                 config.rateLimit.maxTrackedSubjects = value
             }
+            try limit.finish()
         }
 
-        if let quarantine = try section(root, "quarantine") {
-            try reject(unknownIn: quarantine, section: "quarantine",
-                       allowed: ["enabled", "detail", "retention", "nearMissBand"])
-            if let value = quarantine["enabled"] as? Bool { config.quarantine.enabled = value }
-            if let raw = quarantine["detail"] as? String {
+        if var quarantine = try root.subsection("quarantine") {
+            if let value = quarantine.bool("enabled") { config.quarantine.enabled = value }
+            if let raw = quarantine.string("detail") {
                 guard let detail = QuarantineDetail(rawValue: raw) else {
                     throw ConfigurationError.badValue("quarantine.detail", "unknown level '\(raw)'")
                 }
                 config.quarantine.detail = detail
             }
-            if let value = quarantine["retention"] as? Double { config.quarantine.retention = value }
-            if let value = quarantine["nearMissBand"] as? Double {
-                config.quarantine.nearMissBand = value
-            }
+            if let value = quarantine.double("retention") { config.quarantine.retention = value }
+            if let value = quarantine.double("nearMissBand") { config.quarantine.nearMissBand = value }
+            try quarantine.finish()
         }
 
-        if let sessions = try section(root, "maskingSessions") {
-            try reject(unknownIn: sessions, section: "maskingSessions",
-                       allowed: ["enabled", "timeToLive", "extendedTimeToLive", "maxSessions"])
-            if sessions["enabled"] as? Bool == true {
-                var policy = MaskingSessionPolicy()
-                if let value = sessions["timeToLive"] as? Double { policy.timeToLive = value }
-                if let value = sessions["extendedTimeToLive"] as? Double {
-                    policy.extendedTimeToLive = value
-                }
-                if let value = sessions["maxSessions"] as? Int { policy.maxSessions = value }
-                config.maskingSessions = policy
+        if var sessions = try root.subsection("maskingSessions") {
+            // Die Werte werden auch bei `enabled: false` gelesen: sie sind
+            // dann wirkungslos, aber nicht unbekannt — eine vorbereitete
+            // Konfiguration mit ausgeschaltetem Speicher ist kein Tippfehler.
+            let enabled = sessions.bool("enabled") ?? false
+            var policy = MaskingSessionPolicy()
+            if let value = sessions.double("timeToLive") { policy.timeToLive = value }
+            if let value = sessions.double("extendedTimeToLive") {
+                policy.extendedTimeToLive = value
             }
+            if let value = sessions.int("maxSessions") { policy.maxSessions = value }
+            try sessions.finish()
+            if enabled { config.maskingSessions = policy }
         }
 
-        if let raw = root["nextStage"] as? String {
+        if let raw = root.string("nextStage") {
             guard let url = URL(string: raw) else {
                 throw ConfigurationError.badValue("nextStage", "not a URL")
             }
             config.nextStageURL = url
         }
-        if let value = root["drainSeconds"] as? Double { config.drainSeconds = value }
+        if let value = root.double("drainSeconds") { config.drainSeconds = value }
+        try root.finish()
 
         return config
     }
 
-    private static func section(_ root: [String: Any], _ name: String) throws -> [String: Any]? {
-        guard let value = root[name] else { return nil }
-        guard let object = value as? [String: Any] else {
-            throw ConfigurationError.malformed("'\(name)' is not an object")
-        }
-        return object
-    }
+    /// Ein Abschnitt der Datei, der MITSCHREIBT, was gelesen wurde.
+    ///
+    /// Vorher standen die erlaubten Schluessel in einer separaten Liste, die
+    /// von Hand mit den Lesungen synchron zu halten war — ein vergessener
+    /// Listeneintrag machte aus einer gueltigen Einstellung einen Fehler, ein
+    /// vergessenes Lesen aus einem gelisteten Schluessel eine stille
+    /// Wirkungslosigkeit. Jetzt IST die Lesung die Liste: was am Ende nicht
+    /// gelesen wurde, ist unbekannt. Der Fehlermodus aus dem Kopfkommentar
+    /// bleibt derselbe; er laesst sich nur nicht mehr durch Vergessen umgehen.
+    private struct Section {
+        let name: String
+        private let values: [String: Any]
+        private var seen: Set<String> = []
 
-    private static func reject(unknownIn object: [String: Any], section: String,
-                               allowed: Set<String>) throws {
-        let unknown = Set(object.keys).subtracting(allowed)
-        guard unknown.isEmpty else {
-            throw ConfigurationError.unknownKeys(Array(unknown), section: section)
+        init(name: String, values: [String: Any]) {
+            self.name = name
+            self.values = values
+        }
+
+        mutating func int(_ key: String) -> Int? {
+            seen.insert(key)
+            return values[key] as? Int
+        }
+
+        mutating func double(_ key: String) -> Double? {
+            seen.insert(key)
+            return values[key] as? Double
+        }
+
+        mutating func bool(_ key: String) -> Bool? {
+            seen.insert(key)
+            return values[key] as? Bool
+        }
+
+        mutating func string(_ key: String) -> String? {
+            seen.insert(key)
+            return values[key] as? String
+        }
+
+        mutating func subsection(_ key: String) throws -> Section? {
+            seen.insert(key)
+            guard let value = values[key] else { return nil }
+            guard let object = value as? [String: Any] else {
+                throw ConfigurationError.malformed("'\(key)' is not an object")
+            }
+            return Section(name: key, values: object)
+        }
+
+        func finish() throws {
+            let unknown = Set(values.keys).subtracting(seen)
+            guard unknown.isEmpty else {
+                throw ConfigurationError.unknownKeys(Array(unknown), section: name)
+            }
         }
     }
 

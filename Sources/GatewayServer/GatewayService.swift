@@ -128,78 +128,18 @@ public final class GatewayService: @unchecked Sendable {
     // `internal` statt `private`: die Integrationstests fahren den kompletten
     // Pfad Firewall -> Downstream -> De-Maskierung ueber diese Methode, mit
     // einem aufzeichnenden `HTTPResponder` statt eines Sockets.
+    //
+    // Die Methode ist die Abfolge, die Schritte sind benannt. Jeder Schritt,
+    // der antwortet, beendet die Bearbeitung — sichtbar am fruehen `return`.
     func handle(_ request: HTTPRequest, _ connection: any HTTPResponder) async {
-        if request.path == "/healthz" {
-            return connection.respond(status: 200, json: ["status": "ok"])
-        }
-        guard request.method == "POST", let inbound = Providers.adapter(forPath: request.path) else {
-            return connection.respond(status: 404, json: ["error": "unknown route \(request.path)"])
-        }
-
-        let chat: ChatRequest
-        do {
-            chat = try inbound.decodeRequest(request.body)
-        } catch {
-            return connection.respond(status: 400, json: ["error": "\(error)"])
-        }
-
-        // Identitaet kommt von der Identity-Stufe davor — aber sie wird nicht
-        // mehr blind geglaubt. Der Resolver entscheidet; sein Default ignoriert
-        // Behauptungen, statt ihnen zu folgen. Das ist die Vorbedingung fuer
-        // den partitionierten Cache: `cachePartition` entsteht aus Mandant und
-        // Scopes, und ein frei waehlbarer Mandant waere ein Zugriffs-Bypass.
-        let principal: Principal
-        switch principals.resolve(request) {
-        case .identified(let resolved):
-            principal = resolved
-        case .anonymous:
-            principal = .anonymous
-        case .rejected(let reason):
-            var payload: [String: Any] = ["error": "unauthenticated"]
-            if configuration.debugErrorDetails { payload["detail"] = reason }
-            return connection.respond(status: 401, json: payload)
-        }
-
-        // Der Deckel greift HIER: nach der Identitaet (vorher gibt es niemanden
-        // zu deckeln) und vor der Firewall (die Arbeit ist die Kosten). Die
-        // Absage geht denselben payload-freien Audit-Weg wie jede andere
-        // Entscheidung — eine Drosselung, die im Log fehlt, ist als
-        // Angriffsspur unsichtbar.
-        if let rateGuard, case .limited(let retryAfter) = await rateGuard.admit(principal) {
-            let correlationID = UUID().uuidString
-            let decision = GatewayDecision(
-                correlationID: correlationID, disposition: .block, riskScore: 1.0,
-                findings: [RateGuard.finding(retryAfter: retryAfter)], content: "")
-            onAudit?(AuditEvent(decision: decision, principal: principal, model: chat.model))
-            let body = (try? JSONSerialization.data(withJSONObject: [
-                "error": "rate limit exceeded",
-                "correlation_id": correlationID,
-            ], options: [.sortedKeys])) ?? Data()
-            // 429 statt 403: die Anfrage war nicht verboten, nur zu frueh. Der
-            // Unterschied ist fuer den Client handlungsleitend — auf 403 hoert
-            // ein vernuenftiger Client auf, auf 429 wartet er.
-            return connection.respond(status: 429, contentType: "application/json",
-                                      body: body,
-                                      extraHeaders: ["Retry-After": "\(Int(retryAfter))"])
-        }
+        guard let (inbound, chat) = route(request, connection) else { return }
+        guard let principal = resolvePrincipal(request, connection) else { return }
+        guard await admitted(principal, model: chat.model, connection) else { return }
 
         let outcome = await pipeline.process(chat, principal: principal)
         onAudit?(outcome.audit)
-
         guard let forward = outcome.forward else {
-            // Die getroffenen Regel-IDs stehen NICHT in der Standard-Antwort:
-            // sie sind ein Tuning-Orakel — ein Angreifer erfaehrt regelgenau,
-            // was angeschlagen hat, und variiert dagegen. Betreiber korrelieren
-            // ueber die correlation_id mit dem Audit-Log; wer die IDs dennoch
-            // im Fehler sehen will (Entwicklung), setzt `debugErrorDetails`.
-            var payload: [String: Any] = [
-                "error": "blocked by input firewall",
-                "correlation_id": outcome.decision.correlationID,
-            ]
-            if configuration.debugErrorDetails {
-                payload["rules"] = outcome.decision.findings.map { $0.ruleID.rawValue }
-            }
-            return connection.respond(status: 403, json: payload)
+            return refuse(outcome, connection)
         }
 
         let handoff = GatewayHandoff(
@@ -210,28 +150,129 @@ public final class GatewayService: @unchecked Sendable {
             riskScore: outcome.decision.riskScore,
             findings: outcome.decision.findings)
 
-        // Cache-Treffer: der Weg nach oben entfaellt.
-        //
-        // Die Antwort liegt MASKIERT im Cache und wird mit der Session DIESER
-        // Anfrage aufgeloest. Deshalb sieht jeder Aufrufer seine eigenen
-        // Klardaten und nie die des Vorgaengers — dieselbe Partition teilt sich
-        // einen Vault, also steht derselbe Platzhalter bei beiden fuer
-        // denselben Wert. Kennt die Session einen Platzhalter nicht, bleibt er
-        // stehen: sichtbar falsch statt still falsch aufgeloest.
         if let cached = outcome.cached {
-            let hitStart = DispatchTime.now().uptimeNanoseconds
-            respondFromCache(cached, inbound: inbound, session: outcome.session,
-                             streamed: forward.stream, model: forward.model,
-                             connection: connection)
-            emitCompletion(handoff, model: cached.model.isEmpty ? forward.model : cached.model,
-                           usage: cached.usage, since: hitStart,
-                           streamed: forward.stream, status: 200, cacheHit: true)
-            await closeSession(handoff)
-            return
+            serveFromCache(cached, handoff: handoff, forward: forward,
+                           inbound: inbound, session: outcome.session, connection: connection)
+        } else {
+            await relay(handoff, forward: forward, inbound: inbound,
+                        outcome: outcome, connection: connection)
         }
+        // Die Klammer schliesst hier: die Antwort ist raus (oder gescheitert),
+        // die Zuordnung wird nicht mehr gebraucht. Ohne konfigurierten
+        // Speicher ist das ein Leerlauf.
+        await closeSession(handoff)
+    }
 
-        // Der Weg nach oben wird gemessen — nur er, nicht die Firewall davor.
-        // Deren Zeiten stehen als `StageTiming` im Audit-Eintrag.
+    /// Weg und Dialekt der Anfrage. `nil` = bereits beantwortet (Healthcheck,
+    /// unbekannte Route, unlesbarer Rumpf).
+    private func route(_ request: HTTPRequest,
+                       _ connection: any HTTPResponder) -> (ProviderAdapter, ChatRequest)? {
+        if request.path == "/healthz" {
+            connection.respond(status: 200, json: ["status": "ok"])
+            return nil
+        }
+        guard request.method == "POST", let inbound = Providers.adapter(forPath: request.path) else {
+            connection.respond(status: 404, json: ["error": "unknown route \(request.path)"])
+            return nil
+        }
+        do {
+            return (inbound, try inbound.decodeRequest(request.body))
+        } catch {
+            connection.respond(status: 400, json: ["error": "\(error)"])
+            return nil
+        }
+    }
+
+    /// Identitaet kommt von der Identity-Stufe davor — aber sie wird nicht
+    /// blind geglaubt. Der Resolver entscheidet; sein Default ignoriert
+    /// Behauptungen, statt ihnen zu folgen. Das ist die Vorbedingung fuer den
+    /// partitionierten Cache: `cachePartition` entsteht aus Mandant und
+    /// Scopes, und ein frei waehlbarer Mandant waere ein Zugriffs-Bypass.
+    private func resolvePrincipal(_ request: HTTPRequest,
+                                  _ connection: any HTTPResponder) -> Principal? {
+        switch principals.resolve(request) {
+        case .identified(let resolved):
+            return resolved
+        case .anonymous:
+            return .anonymous
+        case .rejected(let reason):
+            var payload: [String: Any] = ["error": "unauthenticated"]
+            if configuration.debugErrorDetails { payload["detail"] = reason }
+            connection.respond(status: 401, json: payload)
+            return nil
+        }
+    }
+
+    /// Der Rate-Deckel greift HIER: nach der Identitaet (vorher gibt es
+    /// niemanden zu deckeln) und vor der Firewall (die Arbeit ist die Kosten).
+    /// Die Absage geht denselben payload-freien Audit-Weg wie jede andere
+    /// Entscheidung — eine Drosselung, die im Log fehlt, ist als Angriffsspur
+    /// unsichtbar.
+    private func admitted(_ principal: Principal, model: String,
+                          _ connection: any HTTPResponder) async -> Bool {
+        guard let rateGuard,
+              case .limited(let retryAfter) = await rateGuard.admit(principal) else { return true }
+
+        let correlationID = UUID().uuidString
+        let decision = GatewayDecision(
+            correlationID: correlationID, disposition: .block, riskScore: 1.0,
+            findings: [RateGuard.finding(retryAfter: retryAfter)], content: "")
+        onAudit?(AuditEvent(decision: decision, principal: principal, model: model))
+        let body = (try? JSONSerialization.data(withJSONObject: [
+            "error": "rate limit exceeded",
+            "correlation_id": correlationID,
+        ], options: [.sortedKeys])) ?? Data()
+        // 429 statt 403: die Anfrage war nicht verboten, nur zu frueh. Der
+        // Unterschied ist fuer den Client handlungsleitend — auf 403 hoert
+        // ein vernuenftiger Client auf, auf 429 wartet er.
+        connection.respond(status: 429, contentType: "application/json",
+                           body: body,
+                           extraHeaders: ["Retry-After": "\(Int(retryAfter))"])
+        return false
+    }
+
+    /// Die Block-Antwort der Firewall. Die getroffenen Regel-IDs stehen NICHT
+    /// in der Standard-Antwort: sie sind ein Tuning-Orakel — ein Angreifer
+    /// erfaehrt regelgenau, was angeschlagen hat, und variiert dagegen.
+    /// Betreiber korrelieren ueber die correlation_id mit dem Audit-Log; wer
+    /// die IDs im Fehler sehen will (Entwicklung), setzt `debugErrorDetails`.
+    private func refuse(_ outcome: GatewayPipeline.Outcome, _ connection: any HTTPResponder) {
+        var payload: [String: Any] = [
+            "error": "blocked by input firewall",
+            "correlation_id": outcome.decision.correlationID,
+        ]
+        if configuration.debugErrorDetails {
+            payload["rules"] = outcome.decision.findings.map { $0.ruleID.rawValue }
+        }
+        connection.respond(status: 403, json: payload)
+    }
+
+    /// Cache-Treffer: der Weg nach oben entfaellt.
+    ///
+    /// Die Antwort liegt MASKIERT im Cache und wird mit der Session DIESER
+    /// Anfrage aufgeloest. Deshalb sieht jeder Aufrufer seine eigenen
+    /// Klardaten und nie die des Vorgaengers — dieselbe Partition teilt sich
+    /// einen Vault, also steht derselbe Platzhalter bei beiden fuer denselben
+    /// Wert. Kennt die Session einen Platzhalter nicht, bleibt er stehen:
+    /// sichtbar falsch statt still falsch aufgeloest.
+    private func serveFromCache(_ cached: ChatResponse, handoff: GatewayHandoff,
+                                forward: ChatRequest, inbound: ProviderAdapter,
+                                session: MaskingSession, connection: any HTTPResponder) {
+        let hitStart = DispatchTime.now().uptimeNanoseconds
+        respondFromCache(cached, inbound: inbound, session: session,
+                         streamed: forward.stream, model: forward.model,
+                         connection: connection)
+        emitCompletion(handoff, model: cached.model.isEmpty ? forward.model : cached.model,
+                       usage: cached.usage, since: hitStart,
+                       streamed: forward.stream, status: 200, cacheHit: true)
+    }
+
+    /// Der Weg nach oben, einmalig oder als Strom, samt Fehlerpfad und
+    /// Cache-Ablage. Gemessen wird nur er — die Zeiten der Firewall stehen
+    /// als `StageTiming` im Audit-Eintrag.
+    private func relay(_ handoff: GatewayHandoff, forward: ChatRequest,
+                       inbound: ProviderAdapter, outcome: GatewayPipeline.Outcome,
+                       connection: any HTTPResponder) async {
         let upstreamStart = DispatchTime.now().uptimeNanoseconds
         do {
             let facts: RelayFacts
@@ -277,10 +318,6 @@ public final class GatewayService: @unchecked Sendable {
             emitCompletion(handoff, model: forward.model, usage: nil,
                            since: upstreamStart, streamed: forward.stream, status: 502)
         }
-        // Im Proxy-Betrieb schliesst die Klammer hier: die Antwort ist raus
-        // (oder gescheitert), die Zuordnung wird nicht mehr gebraucht. Ohne
-        // konfigurierten Speicher ist das ein Leerlauf.
-        await closeSession(handoff)
     }
 
     private func closeSession(_ handoff: GatewayHandoff) async {

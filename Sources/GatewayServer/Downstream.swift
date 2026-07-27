@@ -6,10 +6,10 @@ import GatewayCore
 
 // MARK: - Abwaerts-Naht
 //
-// Im Zielbild liegt unter dem Gateway die Policy Engine; implementiert ist
-// heute der Modellanbieter selbst. Beides ist richtig — der Proxy laeuft allein
-// und liefert sofort Wert. Damit daraus spaeter eine Stufe wird, ohne den
-// Antwortpfad umzubauen, laeuft der Weg nach unten ueber diese Naht.
+// Im Zielbild liegt unter dem Gateway die Policy Engine. Beide Betriebsarten
+// existieren: `ProviderDownstream` reicht direkt an einen Modellanbieter
+// weiter (Alleinbetrieb), `StageDownstream` an die naechste Stufe der Kette.
+// Der Antwortpfad kennt den Unterschied nicht — genau dafuer ist diese Naht da.
 //
 // Der Strom liefert bewusst nur TEXT-Zuwaechse. Rahmung und Dialekt des Ziels
 // gehoeren der Implementierung, De-Maskierung und ausgehende Rahmung bleiben
@@ -58,7 +58,7 @@ public protocol Downstream: Sendable {
 
 // MARK: - Ziel: ein Modellanbieter
 
-/// Reicht direkt an einen Provider weiter. Die heutige Betriebsart.
+/// Reicht direkt an einen Provider weiter — der Alleinbetrieb.
 public struct ProviderDownstream: Downstream {
 
     private let dialect: ProviderAdapter

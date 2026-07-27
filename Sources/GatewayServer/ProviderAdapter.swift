@@ -197,14 +197,10 @@ public struct OpenAIAdapter: ProviderAdapter {
         let dict = try JSONHelper.object(data)
         let choices = dict["choices"] as? [[String: Any]] ?? []
         let message = choices.first?["message"] as? [String: Any]
-        let usage = dict["usage"] as? [String: Any]
         return ChatResponse(
             model: dict["model"] as? String ?? "",
             content: JSONHelper.flattenContent(message?["content"]),
-            usage: usage.map {
-                TokenUsage(promptTokens: $0["prompt_tokens"] as? Int ?? 0,
-                           completionTokens: $0["completion_tokens"] as? Int ?? 0)
-            },
+            usage: (dict["usage"] as? [String: Any]).flatMap(TokenUsage.init(json:)),
             finishReason: choices.first?["finish_reason"] as? String)
     }
 
@@ -255,8 +251,7 @@ public struct OpenAIAdapter: ProviderAdapter {
         guard payload != "[DONE]", let data = payload.data(using: .utf8),
               let dict = try? JSONHelper.object(data),
               let usage = dict["usage"] as? [String: Any] else { return nil }
-        return TokenUsage(promptTokens: usage["prompt_tokens"] as? Int ?? 0,
-                          completionTokens: usage["completion_tokens"] as? Int ?? 0)
+        return TokenUsage(json: usage)
     }
 
     public func encodeStreamError(_ message: String) -> String {

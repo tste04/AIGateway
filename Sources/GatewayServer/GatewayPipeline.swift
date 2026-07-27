@@ -8,16 +8,14 @@ import InputFirewall
 
 // MARK: - Die Pipeline
 //
-// Reihenfolge nach docs/DECISIONS.md:
+// Reihenfolge nach docs/DECISIONS.md — die Nummern dort sind die Nummern hier:
 //
-//   Groessen-Guard -> Injection -> PII-Maskierung -> (DLP) -> (Cache) -> weiter
+//   (1 Identitaet, 2 Rate liegen in GatewayService davor)
+//   2 Groessen-Guard -> 3 Malware -> 4 Injection -> 5 PII -> 6 DLP -> 7 Cache
 //
 // Der TEXT fliesst durch die Stufen: jede Stufe arbeitet auf dem Ergebnis der
 // vorigen, und weitergereicht wird, was hinten herauskommt. Eine Stufe, deren
 // bereinigter Inhalt verworfen wird, erzeugt Befunde ohne Wirkung.
-//
-// DLP und Semantic Cache sind noch nicht gebaut; ihre Plaetze sind markiert,
-// damit sie spaeter nicht an falscher Stelle eingehaengt werden.
 
 public actor GatewayPipeline {
 
@@ -128,7 +126,7 @@ public actor GatewayPipeline {
         // uebersieht jede Bereinigung, die zufaellig denselben Text erzeugt.
         var wasModified = false
 
-        // Stufe 1 — harte Eingabegrenzen. VOR jedem Regelwerk, sonst laeuft es
+        // Stufe 2 — harte Eingabegrenzen. VOR jedem Regelwerk, sonst laeuft es
         // ueber beliebig grosse Eingaben. Beide Achsen pruefen: die Byte-Grenze
         // deckelt die Textmenge, die Stueckzahl-Grenze die Anzahl der
         // Scanner-Laeufe — 100.000 Kleinst-Nachrichten reissen die Byte-Grenze
@@ -201,7 +199,7 @@ public actor GatewayPipeline {
             findings: &findings, risk: worstRisk, content: request.scannableText,
             timings: timings, bytes: payloadBytes) { return stop }
 
-        // Stufe 3 — PII maskieren. MUSS vor der Cache-Schluessel-Bildung liegen
+        // Stufe 5 — PII maskieren. MUSS vor der Cache-Schluessel-Bildung liegen
         // (siehe DECISIONS): kein Klardatum im Cache-Index, und maskierte
         // Anfragen kollidieren oefter, was die Trefferquote hebt.
         var forwarded = sanitized
@@ -270,7 +268,7 @@ public actor GatewayPipeline {
                 timings: timings, bytes: payloadBytes) { return stop }
         }
 
-        // Stufe 5 — Semantic-Cache-Lookup. HIER und nirgends sonst: nach der
+        // Stufe 7 — Semantic-Cache-Lookup. HIER und nirgends sonst: nach der
         // Firewall (sonst waere der Cache mit vergifteten Prompts befuellbar
         // und an ihr vorbei ausspielbar) und nach der Maskierung (sonst laegen
         // Klardaten im Index).

@@ -17,18 +17,16 @@ import GatewayCore
 // Firewall — frueher geht nicht, denn ohne festgestellte Identitaet gibt es
 // niemanden zu deckeln.
 //
-// GESCHLUESSELT WIRD UEBER DAS SUBJECT, nicht ueber `cachePartition`. Die
-// Partition ist absichtlich GETEILT: zwei Nutzer mit gleicher Berechtigung
-// sollen sich Cache-Treffer teilen. Ein geteiltes Rate-Budget waere daraus die
-// falsche Folgerung — dann hungerte ein Vielnutzer seine Kollegen aus, obwohl
-// er ihnen nichts wegnimmt ausser dem Kontingent, das er selbst verbraucht.
+// Geschluesselt wird ueber das SUBJECT, nicht ueber `cachePartition`: die
+// Partition ist absichtlich geteilt (siehe `Principal.cachePartition`), das
+// Kontingent darf es nicht sein — sonst hungert ein Vielnutzer seine Kollegen
+// aus. Langfassung und Datum in docs/DECISIONS.md.
 //
 // EHRLICH DAZUGESAGT: mit dem Default-`AnonymousPrincipalResolver` heisst jeder
-// Aufrufer „anonymous". Der Guard ist dann eine Gesamtbremse fuer das Gateway,
-// keine Pro-Aufrufer-Grenze — nuetzlich gegen Ausreisser, wertlos gegen einen
-// gezielten Nachbarn. Wer pro Aufrufer deckeln will, braucht einen echten
-// `PrincipalResolver`. Das ist dieselbe Vorbedingung wie beim Cache und kein
-// Zufall: beide haengen daran, dass Identitaet BELEGT ist.
+// Aufrufer „anonymous", und der Guard ist eine Gesamtbremse statt einer
+// Pro-Aufrufer-Grenze. Wer pro Aufrufer deckeln will, braucht einen echten
+// `PrincipalResolver` — dieselbe Vorbedingung wie beim Cache, kein Zufall:
+// beide haengen daran, dass Identitaet BELEGT ist.
 
 /// Betriebsparameter des Rate-Guards.
 public struct RateLimitPolicy: Sendable, Equatable {

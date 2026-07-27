@@ -1,6 +1,10 @@
 # Optimierungsplan
 
-Stand: Juli 2026, Commit `91af8a8` (309 Tests grün).
+Stand: Juli 2026. Geschrieben auf `91af8a8` (309 Tests grün), **alle sechs
+Phasen umgesetzt** in den Folge-Commits (Phase 0 einzeln, 1+2 zusammen, 3–6
+zusammen — jede Welle mit eigenem CI-Lauf). Die Befundtabellen unten
+beschreiben den Zustand VOR dem Umbau; sie bleiben stehen, weil sie die
+Begründung der Änderungen sind.
 
 Ziel: die Stellen beseitigen, an denen der Code wiederholt statt abstrahiert,
 und die Kommentare korrigieren, die nicht mehr stimmen. **Keine Funktion darf

@@ -148,12 +148,6 @@ public struct StageDownstream: Downstream {
     }
 
     static func usage(from value: Any?) -> TokenUsage? {
-        guard let object = value as? [String: Any] else { return nil }
-        // Beide Schreibweisen, weil beide im Umlauf sind. Fehlt eine Zahl, gilt
-        // 0 — geschaetzt wird nie, das waere eine erfundene Kostenzeile.
-        let prompt = object["prompt_tokens"] as? Int ?? object["promptTokens"] as? Int
-        let completion = object["completion_tokens"] as? Int ?? object["completionTokens"] as? Int
-        guard prompt != nil || completion != nil else { return nil }
-        return TokenUsage(promptTokens: prompt ?? 0, completionTokens: completion ?? 0)
+        (value as? [String: Any]).flatMap(TokenUsage.init(json:))
     }
 }

@@ -24,6 +24,22 @@ public struct TokenUsage: Sendable, Codable, Equatable {
 
     public var totalTokens: Int { promptTokens + completionTokens }
 
+    /// Liest eine `usage`-Meldung im verbreiteten prompt/completion-Format
+    /// (snake_case wie camelCase).
+    ///
+    /// Liegt hier, weil drei Raender dieselbe Lesung brauchen (OpenAI-Antwort,
+    /// OpenAI-Strom, Stufen-Naht) — eine vierte Abschrift waere die naechste
+    /// Drift-Quelle. `nil`, wenn KEINES der Felder da ist: eine leere Meldung
+    /// ist keine Meldung, und geschaetzt wird nie. Dialekte mit eigenen
+    /// Feldnamen (Anthropic: `input_tokens`/`output_tokens`) lesen weiterhin
+    /// selbst.
+    public init?(json: [String: Any]) {
+        let prompt = json["prompt_tokens"] as? Int ?? json["promptTokens"] as? Int
+        let completion = json["completion_tokens"] as? Int ?? json["completionTokens"] as? Int
+        guard prompt != nil || completion != nil else { return nil }
+        self.init(promptTokens: prompt ?? 0, completionTokens: completion ?? 0)
+    }
+
     /// Vereinigt zwei Teilmeldungen.
     ///
     /// Noetig, weil manche Dialekte Eingabe- und Ausgabe-Verbrauch in
