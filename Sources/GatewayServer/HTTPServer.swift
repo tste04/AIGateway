@@ -379,12 +379,30 @@ public final class HTTPServer: @unchecked Sendable {
         let path = String(requestLine[1]).components(separatedBy: "?").first ?? "/"
 
         var headers: [String: String] = [:]
+        var seenContentLength: String?
+        var conflictingContentLength = false
+        var hasTransferEncoding = false
         for line in lines where line.contains(":") {
             let parts = line.split(separator: ":", maxSplits: 1)
             guard parts.count == 2 else { continue }
-            headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] =
-                parts[1].trimmingCharacters(in: .whitespaces)
+            let name = parts[0].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            if name == "transfer-encoding" { hasTransferEncoding = true }
+            if name == "content-length" {
+                if let prev = seenContentLength, prev != value { conflictingContentLength = true }
+                seenContentLength = value
+            }
+            headers[name] = value
         }
+
+        // Request-Smuggling-Schutz: dieser Server beherrscht KEIN chunked (nur
+        // Content-Length), also ist ein `Transfer-Encoding` gegen einen
+        // vorgelagerten Proxy ein CL/TE-Desync-Vektor — ablehnen statt still als
+        // Content-Length fehlzudeuten. Ebenso zwei widerspruechliche
+        // Content-Length-Header (last-wins waere genau die Desync-Luecke) und
+        // ein nicht-numerisches Content-Length.
+        if hasTransferEncoding || conflictingContentLength { return nil }
+        if let raw = seenContentLength, Int(raw) == nil { return nil }
 
         // 2. Rumpf lesen.
         var body = Data(buffer[headerRange.upperBound...])

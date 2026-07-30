@@ -145,6 +145,40 @@ final class HTTPServerParserTests: XCTestCase {
                        "der Query-String muss vor dem Routing entfernt sein")
     }
 
+    func testTransferEncodingIsRejected() throws {
+        // chunked wird nicht beherrscht; gegen einen Proxy waere ein
+        // Transfer-Encoding ein CL/TE-Desync-Vektor.
+        let box = ParsedBox()
+        let (server, port) = try LoopbackClient.serve { request, conn in
+            box.set(request); conn.respond(status: 200, json: ["ok": true])
+        }
+        defer { server.stop() }
+        let fd = LoopbackClient.connect(port)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        LoopbackClient.send(fd, "POST /x HTTP/1.1\r\nHost: y\r\n"
+            + "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+        let response = LoopbackClient.readAll(fd)
+        close(fd)
+        XCTAssertTrue(response.contains("400"), "Antwort war: \(response)")
+        XCTAssertNil(box.get())
+    }
+
+    func testConflictingContentLengthIsRejected() throws {
+        let box = ParsedBox()
+        let (server, port) = try LoopbackClient.serve { request, conn in
+            box.set(request); conn.respond(status: 200, json: ["ok": true])
+        }
+        defer { server.stop() }
+        let fd = LoopbackClient.connect(port)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        LoopbackClient.send(fd, "POST /x HTTP/1.1\r\nHost: y\r\n"
+            + "Content-Length: 3\r\nContent-Length: 10\r\n\r\nabc")
+        let response = LoopbackClient.readAll(fd)
+        close(fd)
+        XCTAssertTrue(response.contains("400"), "Antwort war: \(response)")
+        XCTAssertNil(box.get())
+    }
+
     func testHeaderNamesAreCaseInsensitive() throws {
         let box = ParsedBox()
         let (server, port) = try LoopbackClient.serve { request, conn in
