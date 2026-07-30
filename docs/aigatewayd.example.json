@@ -12,7 +12,8 @@
     "maxInputBytes": 262144,
     "maxMessages": 64,
     "stageBudgetMilliseconds": 50,
-    "failClosed": true
+    "failClosed": true,
+    "capClientSystemTrust": false
   },
   "stages": {
     "malware": true,
@@ -26,6 +27,12 @@
     "maxEntriesPerPartition": 200,
     "similarityThreshold": 0.95,
     "maxTemperature": 0.3
+  },
+  "embedder": {
+    "baseURL": "http://127.0.0.1:11434",
+    "path": "api/embeddings",
+    "model": "nomic-embed-text",
+    "timeout": 2
   },
   "rateLimit": {
     "enabled": false,

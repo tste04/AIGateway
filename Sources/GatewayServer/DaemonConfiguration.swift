@@ -46,6 +46,15 @@ public struct DaemonConfiguration: Sendable {
     public var nextStageURL: URL?
     /// Wie lange beim Abschalten auf laufende Anfragen gewartet wird.
     public var drainSeconds: TimeInterval
+    /// HTTP-Embedder fuer die semantische Cache-Stufe. `nil` heisst: kein
+    /// Embedder, der Cache arbeitet dann rein exakt. Der API-Schluessel kommt
+    /// wie der Upstream-Schluessel NUR aus der Umgebung
+    /// (`AIGATEWAY_EMBEDDER_API_KEY`), nie aus der Datei.
+    public var embedderBaseURL: URL?
+    public var embedderPath: String
+    public var embedderModel: String
+    public var embedderTimeout: TimeInterval
+    public var embedderAPIKey: String?
 
     public init(gateway: GatewayConfiguration = GatewayConfiguration(),
                 policy: GatewayPolicy = .standard,
@@ -57,7 +66,12 @@ public struct DaemonConfiguration: Sendable {
                 quarantine: QuarantinePolicy = QuarantinePolicy(),
                 maskingSessions: MaskingSessionPolicy? = nil,
                 nextStageURL: URL? = nil,
-                drainSeconds: TimeInterval = 15) {
+                drainSeconds: TimeInterval = 15,
+                embedderBaseURL: URL? = nil,
+                embedderPath: String = "api/embeddings",
+                embedderModel: String = "nomic-embed-text",
+                embedderTimeout: TimeInterval = 2,
+                embedderAPIKey: String? = nil) {
         self.gateway = gateway
         self.policy = policy
         self.pii = pii
@@ -69,6 +83,11 @@ public struct DaemonConfiguration: Sendable {
         self.maskingSessions = maskingSessions
         self.nextStageURL = nextStageURL
         self.drainSeconds = drainSeconds
+        self.embedderBaseURL = embedderBaseURL
+        self.embedderPath = embedderPath
+        self.embedderModel = embedderModel
+        self.embedderTimeout = embedderTimeout
+        self.embedderAPIKey = embedderAPIKey
     }
 
     // MARK: - Lesen
@@ -215,6 +234,21 @@ public struct DaemonConfiguration: Sendable {
             if enabled { config.maskingSessions = policy }
         }
 
+        if var embedder = try root.subsection("embedder") {
+            if let raw = embedder.string("baseURL") {
+                guard let url = URL(string: raw) else {
+                    throw ConfigurationError.badValue("embedder.baseURL", "not a URL")
+                }
+                config.embedderBaseURL = url
+            }
+            if let value = embedder.string("path") { config.embedderPath = value }
+            if let value = embedder.string("model") { config.embedderModel = value }
+            if let value = embedder.double("timeout") { config.embedderTimeout = value }
+            try embedder.finish()
+        }
+        // Wie der Upstream-Schluessel: nur aus der Umgebung.
+        config.embedderAPIKey = environment["AIGATEWAY_EMBEDDER_API_KEY"]
+
         if let raw = root.string("nextStage") {
             guard let url = URL(string: raw) else {
                 throw ConfigurationError.badValue("nextStage", "not a URL")
@@ -321,5 +355,15 @@ public struct DaemonConfiguration: Sendable {
     /// Konfigurationszeile (siehe QuarantineSink-Invariante).
     public func makeQuarantineSink() -> QuarantineSink? {
         quarantine.enabled ? MemoryQuarantineSink() : nil
+    }
+
+    /// Der Embedder fuer die semantische Cache-Stufe, oder `nil`. Ohne ihn
+    /// arbeitet der Cache rein exakt — die zweite Stufe verliert Reichweite,
+    /// nicht Funktion. Bricht keine harte Regel: ausgehende `URLSession` ist die
+    /// erlaubte Netz-Ausnahme.
+    public func makeEmbedder() -> Embedder? {
+        guard let url = embedderBaseURL else { return nil }
+        return HTTPEmbedder(baseURL: url, path: embedderPath, model: embedderModel,
+                            apiKey: embedderAPIKey, timeout: embedderTimeout)
     }
 }

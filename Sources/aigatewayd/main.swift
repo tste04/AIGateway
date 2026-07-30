@@ -127,6 +127,7 @@ if let index = arguments.firstIndex(of: "--config") {
 // MARK: - Zusammenbau
 
 let pipeline = configuration.makePipeline(
+    embedder: configuration.makeEmbedder(),
     quarantineSink: configuration.makeQuarantineSink())
 let rateGuard = configuration.makeRateGuard()
 

@@ -282,6 +282,27 @@ final class DaemonConfigurationTests: XCTestCase {
         XCTAssertEqual(kept.count, 1, "der Block wird aufbewahrt")
     }
 
+    func testEmbedderFollowsConfigAndEnvKey() throws {
+        // Der Befund M4: die semantische Cache-Stufe war im Daemon tot, weil
+        // kein Embedder verdrahtet wurde. Jetzt liest die Config eine
+        // embedder-Sektion und baut ihn.
+        XCTAssertNil(DaemonConfiguration().makeEmbedder(), "ohne baseURL kein Embedder")
+
+        let config = try parse(
+            ["embedder": ["baseURL": "http://127.0.0.1:11434", "model": "nomic-embed-text"]],
+            environment: ["AIGATEWAY_EMBEDDER_API_KEY": "sk-embed"])
+        XCTAssertEqual(config.embedderBaseURL?.absoluteString, "http://127.0.0.1:11434")
+        XCTAssertEqual(config.embedderModel, "nomic-embed-text")
+        XCTAssertEqual(config.embedderAPIKey, "sk-embed", "Schluessel nur aus der Umgebung")
+        XCTAssertNotNil(config.makeEmbedder())
+    }
+
+    func testEmbedderKeyIsNotReadFromFile() {
+        // Wie der Upstream-Schluessel: ein apiKey in der Datei ist ein
+        // unbekannter Schluessel, kein akzeptiertes Feld.
+        XCTAssertThrowsError(try parse(["embedder": ["baseURL": "http://x", "apiKey": "sk-in-file"]]))
+    }
+
     func testCacheIsOnlyBuiltWhenEnabled() async {
         var config = DaemonConfiguration()
         let without = await config.makePipeline().cacheStatistics()
