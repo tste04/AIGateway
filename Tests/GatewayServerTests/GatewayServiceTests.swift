@@ -32,6 +32,7 @@ private final class RecordingResponder: HTTPResponder, @unchecked Sendable {
     private(set) var body: Data?
     private(set) var headers: [String: String] = [:]
     private(set) var streamContentType: String?
+    private(set) var streamHeaders: [String: String] = [:]
     private(set) var chunks: [String] = []
     private(set) var streamEnded = false
 
@@ -41,9 +42,10 @@ private final class RecordingResponder: HTTPResponder, @unchecked Sendable {
         self.body = body
         self.headers = extraHeaders
     }
-    func beginStream(contentType: String) {
+    func beginStream(contentType: String, extraHeaders: [String: String]) {
         lock.lock(); defer { lock.unlock() }
         streamContentType = contentType
+        streamHeaders = extraHeaders
     }
     @discardableResult func writeChunk(_ text: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -85,6 +87,7 @@ final class GatewayServiceTests: XCTestCase {
     private func makeService(downstream: Downstream,
                              pii: Bool = false,
                              debugErrorDetails: Bool = false,
+                             onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                              onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil)
     -> GatewayService {
         // Grosszuegiges Budget: kalter Regex-Start auf CI darf nicht blocken.
@@ -97,6 +100,7 @@ final class GatewayServiceTests: XCTestCase {
             configuration: GatewayConfiguration(debugErrorDetails: debugErrorDetails),
             pipeline: pipeline,
             downstream: downstream,
+            onAudit: onAudit,
             onCompletion: onCompletion)
     }
 
@@ -272,6 +276,63 @@ final class GatewayServiceTests: XCTestCase {
         await service.handle(HTTPRequest(method: "POST", path: "/nope",
                                          headers: [:], body: Data()), missing)
         XCTAssertEqual(missing.status, 404)
+    }
+
+    // MARK: Korrelations-Header
+
+    func testResponseHeaderCarriesTheAuditCorrelationID() async {
+        let audits = Locked<[AuditEvent]>([])
+        let service = makeService(downstream: FakeDownstream(), onAudit: { audits.append($0) })
+        let responder = RecordingResponder()
+
+        await service.handle(post("/v1/chat/completions", chatBody("hi")), responder)
+
+        XCTAssertEqual(responder.status, 200)
+        XCTAssertEqual(responder.headers["X-Correlation-ID"], audits.get().first?.correlationID,
+                       "Header und Audit-Eintrag muessen dieselbe ID tragen")
+    }
+
+    func testFailureHeaderMatchesTheBodyCorrelationID() async {
+        let fake = FakeDownstream(onSend: { _ in
+            throw GatewayServerError.upstream(status: 500, body: "boom")
+        })
+        let service = makeService(downstream: fake)
+        let responder = RecordingResponder()
+
+        await service.handle(post("/v1/chat/completions", chatBody("hi")), responder)
+
+        XCTAssertEqual(responder.status, 502)
+        XCTAssertNotNil(responder.headers["X-Correlation-ID"])
+        XCTAssertEqual(responder.headers["X-Correlation-ID"],
+                       responder.bodyJSON["correlation_id"] as? String)
+    }
+
+    func testStreamCarriesTheCorrelationHeader() async {
+        let fake = FakeDownstream(onStream: { _, onDelta in
+            onDelta("Hallo")
+            return nil
+        })
+        let service = makeService(downstream: fake)
+        let responder = RecordingResponder()
+
+        await service.handle(post("/v1/chat/completions", chatBody("hi", stream: true)),
+                             responder)
+
+        // Ein Strom hat genau einen Header-Block, und ein Fehler mitten im
+        // Strom ist kein Status mehr — der Header ist dort der einzige Weg,
+        // einen Client-Report dem Audit-Log zuzuordnen.
+        XCTAssertNotNil(responder.streamHeaders["X-Correlation-ID"])
+    }
+
+    func testEvenPreFirewallRefusalsCarryTheHeader() async {
+        // 404 faellt VOR der Firewall — eine Entscheidung der Pipeline gibt es
+        // nicht, einen zuordenbaren Report soll es trotzdem geben.
+        let service = makeService(downstream: FakeDownstream())
+        let missing = RecordingResponder()
+        await service.handle(HTTPRequest(method: "POST", path: "/nope",
+                                         headers: [:], body: Data()), missing)
+        XCTAssertEqual(missing.status, 404)
+        XCTAssertNotNil(missing.headers["X-Correlation-ID"])
     }
 }
 

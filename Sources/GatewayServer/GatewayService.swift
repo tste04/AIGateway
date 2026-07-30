@@ -150,12 +150,22 @@ public final class GatewayService: @unchecked Sendable {
     //
     // Die Methode ist die Abfolge, die Schritte sind benannt. Jeder Schritt,
     // der antwortet, beendet die Bearbeitung — sichtbar am fruehen `return`.
-    func handle(_ request: HTTPRequest, _ connection: any HTTPResponder) async {
+    func handle(_ request: HTTPRequest, _ client: any HTTPResponder) async {
+        // Die Korrelations-ID entsteht HIER, nicht erst in der Pipeline: der
+        // dekorierte Responder stempelt sie als Header auf jede Antwort dieses
+        // Aufrufs — auch auf 400/404/429, die vor der Firewall fallen. Ein
+        // Client-Report mit diesem Header ist damit im Audit-Log auffindbar,
+        // ohne dass der Fehlerkoerper geparst werden muss; bei Stroemen ist der
+        // Header sogar der einzige Traeger, denn deren Fehler sind kein JSON.
+        let correlationID = UUID().uuidString
+        let connection = CorrelatedResponder(client, correlationID: correlationID)
         guard let (inbound, chat) = route(request, connection) else { return }
         guard let principal = resolvePrincipal(request, connection) else { return }
-        guard await admitted(principal, model: chat.model, connection) else { return }
+        guard await admitted(principal, model: chat.model,
+                             correlationID: correlationID, connection) else { return }
 
-        let outcome = await pipeline.process(chat, principal: principal)
+        let outcome = await pipeline.process(chat, principal: principal,
+                                             correlationID: correlationID)
         onAudit?(outcome.audit)
         guard let forward = outcome.forward else {
             return refuse(outcome, connection)
@@ -227,12 +237,11 @@ public final class GatewayService: @unchecked Sendable {
     /// Die Absage geht denselben payload-freien Audit-Weg wie jede andere
     /// Entscheidung — eine Drosselung, die im Log fehlt, ist als Angriffsspur
     /// unsichtbar.
-    private func admitted(_ principal: Principal, model: String,
+    private func admitted(_ principal: Principal, model: String, correlationID: String,
                           _ connection: any HTTPResponder) async -> Bool {
         guard let rateGuard,
               case .limited(let retryAfter) = await rateGuard.admit(principal) else { return true }
 
-        let correlationID = UUID().uuidString
         let decision = GatewayDecision(
             correlationID: correlationID, disposition: .block, riskScore: 1.0,
             findings: [RateGuard.finding(retryAfter: retryAfter)], content: "")
@@ -486,4 +495,39 @@ private final class RewriteState: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return masked
     }
+}
+
+/// Stempelt die Korrelations-ID als `X-Correlation-ID` auf jede Antwort eines
+/// Aufrufs. Als Dekorator statt an jeder Antwortstelle einzeln: die Stellen
+/// sind verstreut (Route, Identitaet, Rate-Deckel, Firewall, Cache, Relay),
+/// und eine vergessene waere genau die, deren Report sich nicht zuordnen
+/// laesst. Der Header traegt dieselbe ID wie `AuditEvent` und
+/// `CompletionEvent` — der Rueckweg vom Client-Report ins Log.
+final class CorrelatedResponder: HTTPResponder, @unchecked Sendable {
+    static let headerName = "X-Correlation-ID"
+
+    private let base: any HTTPResponder
+    private let correlationID: String
+
+    init(_ base: any HTTPResponder, correlationID: String) {
+        self.base = base
+        self.correlationID = correlationID
+    }
+
+    func respond(status: Int, contentType: String, body: Data, extraHeaders: [String: String]) {
+        var headers = extraHeaders
+        headers[Self.headerName] = correlationID
+        base.respond(status: status, contentType: contentType, body: body, extraHeaders: headers)
+    }
+
+    func beginStream(contentType: String, extraHeaders: [String: String]) {
+        var headers = extraHeaders
+        headers[Self.headerName] = correlationID
+        base.beginStream(contentType: contentType, extraHeaders: headers)
+    }
+
+    @discardableResult
+    func writeChunk(_ text: String) -> Bool { base.writeChunk(text) }
+
+    func endStream() { base.endStream() }
 }

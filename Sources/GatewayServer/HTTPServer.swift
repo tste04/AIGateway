@@ -41,7 +41,7 @@ public struct HTTPRequest: Sendable {
 /// echten Sockets erreichbar und blieb deshalb ungetestet.
 public protocol HTTPResponder: AnyObject, Sendable {
     func respond(status: Int, contentType: String, body: Data, extraHeaders: [String: String])
-    func beginStream(contentType: String)
+    func beginStream(contentType: String, extraHeaders: [String: String])
     @discardableResult func writeChunk(_ text: String) -> Bool
     func endStream()
 }
@@ -51,6 +51,10 @@ public extension HTTPResponder {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
             ?? Data(#"{"error":"encoding failed"}"#.utf8)
         respond(status: status, contentType: "application/json", body: data, extraHeaders: [:])
+    }
+
+    func beginStream(contentType: String) {
+        beginStream(contentType: contentType, extraHeaders: [:])
     }
 }
 
@@ -81,13 +85,14 @@ public final class HTTPConnection: HTTPResponder, @unchecked Sendable {
     /// Beginnt einen Antwortstrom. Ohne `Content-Length` — das Ende ist der
     /// Verbindungsschluss, was HTTP/1.1 mit `Connection: close` ausdruecklich
     /// erlaubt und jeder SSE-Client versteht.
-    public func beginStream(contentType: String) {
+    public func beginStream(contentType: String, extraHeaders: [String: String] = [:]) {
         lock.lock(); defer { lock.unlock() }
         guard !closed, !streaming else { return }
         streaming = true
         var head = "HTTP/1.1 200 OK\r\n"
         head += "Content-Type: \(contentType)\r\n"
         head += "Cache-Control: no-cache\r\n"
+        for (k, v) in extraHeaders { head += "\(k): \(v)\r\n" }
         head += "Connection: close\r\n\r\n"
         _ = Self.writeAll(fd, Data(head.utf8))
     }
