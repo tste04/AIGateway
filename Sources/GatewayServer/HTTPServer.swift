@@ -299,17 +299,28 @@ public final class HTTPServer: @unchecked Sendable {
     }
 
     private func serve(_ fd: Int32) {
-        // Lese-Timeout auf Socket-Ebene: `read` kehrt dann mit Fehler zurueck
-        // statt endlos zu blockieren. Die Header-Obergrenze in `readRequest`
-        // begrenzt die Menge, dieses Timeout begrenzt die Dauer.
+        // Zwei Timeouts, zwei verschiedene Gefahren:
+        // - SO_RCVTIMEO begrenzt EINEN blockierenden `read`. Ohne den haengt
+        //   ein Client, der nach dem Verbindungsaufbau schweigt.
+        // - SO_SNDTIMEO begrenzt EINEN blockierenden `write`/`send`. Ohne den
+        //   haengt ein Slow-Reader, der den Sendepuffer nicht leert (besonders
+        //   beim SSE-Streaming): `writeAll`/`writeChunk` gaeben sonst nie auf.
         var timeout = timeval(tv_sec: time_t(readTimeoutSeconds), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
                    socklen_t(MemoryLayout<timeval>.size))
 
         let connection = HTTPConnection(fd: fd)
         defer { connection.finish() }
 
-        guard let request = readRequest(fd) else {
+        // Absoluter Deadline fuer das GESAMTE Lesen der Anfrage. Das
+        // Socket-Timeout begrenzt nur einen einzelnen `read`; ein Tropf von
+        // einem Byte knapp vor jedem Ablauf haelt seinen Thread sonst
+        // unbegrenzt (Slowloris). Die Deadline deckelt die Dauer ueber ALLE
+        // Lesevorgaenge dieser Verbindung.
+        let deadline = Date().addingTimeInterval(TimeInterval(readTimeoutSeconds))
+        guard let request = readRequest(fd, deadline: deadline) else {
             connection.respond(status: 400, json: ["error": "malformed request"])
             return
         }
@@ -334,7 +345,11 @@ public final class HTTPServer: @unchecked Sendable {
     }
 
     /// Liest Kopf und Rumpf. Nur `Content-Length`, kein chunked.
-    private func readRequest(_ fd: Int32) -> HTTPRequest? {
+    ///
+    /// `deadline` deckelt die Gesamtdauer ueber ALLE Lesevorgaenge: das
+    /// Socket-Timeout unterbricht nur einen einzelnen `read`, ein Tropf knapp
+    /// vor jedem Ablauf haelt die Verbindung sonst unbegrenzt.
+    private func readRequest(_ fd: Int32, deadline: Date) -> HTTPRequest? {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         let separator = Data("\r\n\r\n".utf8)
@@ -342,6 +357,7 @@ public final class HTTPServer: @unchecked Sendable {
         // 1. Kopf lesen.
         var headerEnd: Range<Data.Index>?
         while headerEnd == nil {
+            guard Date() < deadline else { return nil }
             let n = read(fd, &chunk, chunk.count)
             guard n > 0 else { return nil }
             buffer.append(contentsOf: chunk[0..<n])
@@ -376,6 +392,7 @@ public final class HTTPServer: @unchecked Sendable {
         if expected > maxBodyBytes { return HTTPRequest(method: method, path: path,
                                                         headers: headers, body: body) }
         while body.count < expected {
+            guard Date() < deadline else { break }
             let n = read(fd, &chunk, chunk.count)
             guard n > 0 else { break }
             body.append(contentsOf: chunk[0..<n])
