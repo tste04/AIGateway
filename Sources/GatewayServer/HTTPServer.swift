@@ -224,9 +224,26 @@ public final class HTTPServer: @unchecked Sendable {
             throw GatewayServerError.unsupported("listen() failed (errno \(errno))")
         }
 
+        stateLock.lock()
         listenFD = fd
         running = true
+        stateLock.unlock()
         Thread.detachNewThread { [weak self] in self?.acceptLoop() }
+    }
+
+    // `running` und `listenFD` werden vom Accept-Thread gelesen und vom
+    // Aufrufer-Thread (stop) geschrieben — beide Zugriffe liegen unter
+    // `stateLock`, sonst ist es ein Data Race (unter striktem Swift-6-Checking
+    // ein Fehler). Der blockierende `accept` laeuft ausserhalb der Sperre auf
+    // einer lokalen Kopie des fd.
+    private func isRunning() -> Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return running
+    }
+
+    private func currentListenFD() -> Int32 {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return listenFD
     }
 
     /// Hoert sofort auf, Verbindungen anzunehmen.
@@ -241,11 +258,17 @@ public final class HTTPServer: @unchecked Sendable {
     /// - Returns: `true`, wenn beim Ende nichts mehr lief.
     @discardableResult
     public func stop(drainSeconds: TimeInterval = 0) -> Bool {
+        stateLock.lock()
         running = false
-        if listenFD >= 0 {
-            shutdown(listenFD, Int32(SHUT_RDWR))
-            close(listenFD)
-            listenFD = -1
+        let fd = listenFD
+        listenFD = -1
+        stateLock.unlock()
+        if fd >= 0 {
+            // Schliesst den Annahme-Socket: der blockierende `accept` im
+            // Accept-Thread kehrt dann mit Fehler zurueck und die Schleife
+            // endet, weil `isRunning()` jetzt false ist.
+            shutdown(fd, Int32(SHUT_RDWR))
+            close(fd)
         }
         guard drainSeconds > 0 else { return activeConnectionCount() == 0 }
 
@@ -265,12 +288,14 @@ public final class HTTPServer: @unchecked Sendable {
     }
 
     private func acceptLoop() {
-        while running {
+        while isRunning() {
+            let listen = currentListenFD()
+            guard listen >= 0 else { return }
             var clientAddr = sockaddr()
             var length = socklen_t(MemoryLayout<sockaddr>.size)
-            let client = accept(listenFD, &clientAddr, &length)
+            let client = accept(listen, &clientAddr, &length)
             guard client >= 0 else {
-                if running { continue } else { return }
+                if isRunning() { continue } else { return }
             }
 
             stateLock.lock()
