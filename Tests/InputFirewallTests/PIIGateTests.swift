@@ -275,16 +275,17 @@ final class PseudonymVaultTests: XCTestCase {
         XCTAssertEqual(tokenA, tokenB)
     }
 
-    func testRestoreReplacesLongestTokenFirst() {
+    func testRestoreReplacesLongestTokenFirst() async {
         // [Person-1] ist ein Praefix von [Person-10]. Wuerde restore in
         // Dictionary-Reihenfolge das kurze zuerst ersetzen, zerlegte es das
         // lange — und der Test waere je Hash-Seed ein Muenzwurf. Zehn Tokens
         // praegen, dann beide in EINEM Text zurueckuebersetzen.
+        // PseudonymVault ist ein Actor — die Aufrufe muessen awaited werden.
         let vault = PseudonymVault(fileURL: nil)
         for index in 1...10 {
-            _ = vault.token(for: "Wert-\(index)", canonical: "person|name-\(index)", category: .person)
+            _ = await vault.token(for: "Wert-\(index)", canonical: "person|name-\(index)", category: .person)
         }
-        let restored = vault.restore("A [Person-1] B [Person-10] C")
+        let restored = await vault.restore("A [Person-1] B [Person-10] C")
         XCTAssertEqual(restored, "A Wert-1 B Wert-10 C")
         XCTAssertFalse(restored.contains("[Person-"), "kein Token darf stehen bleiben")
     }
