@@ -24,7 +24,10 @@ public enum Disposition: String, Sendable, Codable {
 public struct StageTiming: Sendable, Codable, Equatable {
     public let stage: String
     public let milliseconds: Double
-    /// Stufe hat ihr Budget gerissen und wurde abgebrochen.
+    /// Stufe hat ihr Zeitbudget gerissen. Das ist eine BEWERTUNG NACH dem Lauf,
+    /// kein Abbruch waehrenddessen: ein reiner Regex-Lauf laesst sich in Swift
+    /// nicht von aussen unterbrechen (siehe `GatewayPipeline.budgetTiming`). Der
+    /// Wert entscheidet, ob das Ergebnis noch zaehlt, nicht ob die Stufe lief.
     public let timedOut: Bool
 
     public init(stage: String, milliseconds: Double, timedOut: Bool = false) {
