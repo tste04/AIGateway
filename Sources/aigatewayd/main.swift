@@ -126,7 +126,8 @@ if let index = arguments.firstIndex(of: "--config") {
 
 // MARK: - Zusammenbau
 
-let pipeline = configuration.makePipeline()
+let pipeline = configuration.makePipeline(
+    quarantineSink: configuration.makeQuarantineSink())
 let rateGuard = configuration.makeRateGuard()
 
 // Proxy- oder Stufenbetrieb. Der Unterschied ist eine Zeile hier und keine in

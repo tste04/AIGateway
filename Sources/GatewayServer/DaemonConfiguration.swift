@@ -313,4 +313,13 @@ public struct DaemonConfiguration: Sendable {
     public func makeRateGuard() -> RateGuard? {
         rateLimit.enabled ? RateGuard(policy: rateLimit) : nil
     }
+
+    /// Der Beweismittelschrank fuer den Feedback Loop. `nil`, wenn die
+    /// Quarantaene aus ist. Bewusst der In-Memory-Sink: eine persistente Senke
+    /// haelt Nutzinhalt auf Platte und entscheidet ueber Ablageort und
+    /// Loeschfrist des Betreibers mit — das ist Host-Programm-Sache, keine
+    /// Konfigurationszeile (siehe QuarantineSink-Invariante).
+    public func makeQuarantineSink() -> QuarantineSink? {
+        quarantine.enabled ? MemoryQuarantineSink() : nil
+    }
 }
