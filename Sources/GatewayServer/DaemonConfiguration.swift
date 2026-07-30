@@ -147,6 +147,9 @@ public struct DaemonConfiguration: Sendable {
             if let value = policy.bool("failClosed") {
                 config.policy.failureMode = value ? .failClosed : .failOpen
             }
+            if let value = policy.bool("capClientSystemTrust") {
+                config.policy.capClientSystemTrust = value
+            }
             try policy.finish()
         }
 

@@ -46,6 +46,22 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
     /// Die Escape-Luke fuer Fehlalarme — z. B. Sicherheits-Dokumentation, die
     /// Angriffsmuster zitiert und sonst dauerhaft blockiert wuerde.
     public var suppressedRules: Set<RuleID>
+    /// Deckelt den Vertrauensrabatt einer vom Client als `system` deklarierten
+    /// Nachricht auf `neutral`.
+    ///
+    /// Hintergrund: `system` → `trusted` gibt den staerksten Rabatt (0.55). Im
+    /// Gateway kommt das Rollen-Label aber VERBATIM aus dem Client-Request;
+    /// nichts belegt, dass eine `system`-Nachricht anwendungserzeugt ist. Ein
+    /// Angreifer, der seine Injection als `system` deklariert, drueckt sie so
+    /// unter die Schwelle. Wer vor dem Gateway keine belegte Identitaet hat (der
+    /// Default-Resolver ist anonym), sollte diesen Deckel setzen — dann zaehlt
+    /// eine Client-`system`-Nachricht wie `user` (neutral).
+    ///
+    /// Default `false`: die dokumentierte Provenienz-Bewertung (DECISIONS) bleibt
+    /// unveraendert, wo `system` aus einer vertrauenswuerdigen, identitaets-
+    /// belegten Anwendung stammt. Es ist eine bewusste Betreiber-Entscheidung,
+    /// keine stille Voreinstellung.
+    public var capClientSystemTrust: Bool
 
     public init(
         blockThreshold: Double = 0.7,
@@ -53,7 +69,8 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
         stageBudgetMilliseconds: Double = 50,
         maxInputBytes: Int = 1_000_000,
         maxMessages: Int = 1_000,
-        suppressedRules: Set<RuleID> = []
+        suppressedRules: Set<RuleID> = [],
+        capClientSystemTrust: Bool = false
     ) {
         self.blockThreshold = blockThreshold
         self.failureMode = failureMode
@@ -61,6 +78,7 @@ public struct GatewayPolicy: Sendable, Codable, Equatable {
         self.maxInputBytes = maxInputBytes
         self.maxMessages = maxMessages
         self.suppressedRules = suppressedRules
+        self.capClientSystemTrust = capClientSystemTrust
     }
 
     public static let standard = GatewayPolicy()

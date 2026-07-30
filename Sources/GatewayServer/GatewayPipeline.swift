@@ -118,6 +118,15 @@ public actor GatewayPipeline {
         }
     }
 
+    /// Trust einer Nachricht unter Beruecksichtigung des Policy-Deckels. Ist
+    /// `capClientSystemTrust` gesetzt, zaehlt eine vom Client als `system`
+    /// deklarierte Nachricht wie `neutral` — nichts belegt im Gateway, dass sie
+    /// anwendungserzeugt ist (siehe `GatewayPolicy.capClientSystemTrust`).
+    private func effectiveTrust(for role: ChatMessage.Role) -> SourceTrust {
+        if policy.capClientSystemTrust, role == .system { return .neutral }
+        return Self.trust(for: role)
+    }
+
     public func process(_ request: ChatRequest,
                         principal: Principal,
                         correlationID: String = UUID().uuidString) async -> Outcome {
@@ -187,7 +196,7 @@ public actor GatewayPipeline {
         var scanned: [ChatMessage] = []
         let injectionStart = DispatchTime.now().uptimeNanoseconds
         for message in request.messages {
-            let result = injection.scan(message.content, trust: Self.trust(for: message.role))
+            let result = injection.scan(message.content, trust: effectiveTrust(for: message.role))
             findings += result.findings
             worstRisk = max(worstRisk, policy.disposition(for: result).1)
             wasModified = wasModified || result.wasModified

@@ -239,6 +239,21 @@ Nachricht mit der Vertrauensstufe ihrer Rolle:
 Dieselbe Zeichenfolge wird dadurch in einer Systemnachricht durchgelassen und in
 einer Tool-Ausgabe geblockt. Das ist beabsichtigt.
 
+**Nachtrag (Juli 2026): der `system`-Rabatt ist eine Behauptung, wenn keine
+Identität dahintersteht.** Die Begründung „stammt aus der Anwendung selbst"
+gilt nur, wenn die Anwendung belegt ist. Im Gateway kommt das Rollen-Label
+aber verbatim aus dem Client-Request; der Default-Resolver ist anonym. Ein
+Angreifer, der seine Injection als `system` deklariert, erschleicht sich so den
+stärksten Rabatt (0.55) und drückt sie unter die Schwelle. Neue Policy-Option
+`capClientSystemTrust` (Default `false`) deckelt eine Client-`system`-Nachricht
+auf `neutral`. Bewusst opt-in statt Default-Flip: wo `system` aus einer
+identitätsbelegten Anwendung stammt, bleibt der Rabatt korrekt; wo nicht (der
+häufige Fall vor dem Reverse Proxy), setzt der Betreiber den Deckel. Die
+Sprengweite ist begrenzt — der Angreifer jailbreakt ein Modell, das er ohnehin
+direkt ansprechen kann, und dieses Gateway injiziert keinen eigenen
+System-Prompt —, aber die explizite Kontrolle gehört dem Betreiber, nicht einer
+stillen Voreinstellung.
+
 ### Risiko je Nachricht: Maximum statt Summe
 
 Die Pipeline bewertet jede Nachricht einzeln und nimmt das **Maximum** der
