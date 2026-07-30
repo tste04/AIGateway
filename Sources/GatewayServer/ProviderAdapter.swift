@@ -65,6 +65,15 @@ public protocol ProviderAdapter: Sendable {
     /// selbst erfahren, sonst sieht ein Abbruch wie eine vollstaendige
     /// Antwort aus.
     func encodeStreamError(_ message: String) -> String
+
+    /// Erkennt ein FEHLER-Ereignis im EINGEHENDEN Upstream-Strom.
+    ///
+    /// Ein Provider kann auf eine Stream-Anfrage mit HTTP 200 antworten und den
+    /// Fehler dann als In-Band-Ereignis schicken (`{"error": …}`). Ohne diese
+    /// Erkennung liefe der Strom leer aus und der Abbruch saehe fuer den Client
+    /// wie eine vollstaendige Antwort aus — samt falschem `status: 200` im
+    /// Audit. `nil` = kein Fehler in dieser Nutzlast.
+    func streamFailure(fromEventPayload payload: String) -> GatewayServerError?
 }
 
 public extension ProviderAdapter {
@@ -75,6 +84,23 @@ public extension ProviderAdapter {
     /// Generische Form fuer Dialekte ohne eigenes Fehlerformat.
     func encodeStreamError(_ message: String) -> String {
         JSONHelper.compactJSONLine(["error": message])
+    }
+
+    /// Deckt alle drei mitgelieferten Dialekte ab: OpenAI und Anthropic tragen
+    /// den Fehler als Objekt (`{"error":{"message":…}}` bzw.
+    /// `{"type":"error","error":{"message":…}}`), Ollama als String
+    /// (`{"error":"…"}`). Der HTTP-Status ist hier nicht bekannt (die Antwort
+    /// WAR 200), deshalb `status: 0`; der Antwortpfad macht daraus einen 502.
+    func streamFailure(fromEventPayload payload: String) -> GatewayServerError? {
+        guard let data = payload.data(using: .utf8),
+              let dict = try? JSONHelper.object(data) else { return nil }
+        if let message = dict["error"] as? String {
+            return .upstream(status: 0, body: message)
+        }
+        if let error = dict["error"] as? [String: Any] {
+            return .upstream(status: 0, body: error["message"] as? String ?? "upstream stream error")
+        }
+        return nil
     }
 }
 

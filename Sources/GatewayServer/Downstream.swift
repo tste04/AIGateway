@@ -104,6 +104,10 @@ public struct ProviderDownstream: Downstream {
         ) { data in
             for text in events.consume(data) { onDelta(text) }
         }
+        // Ein In-Band-Fehler des Providers ({"error":…} bei HTTP 200) wird
+        // nach dem Strom-Ende geworfen — dieselbe Linie wie StageDownstream.
+        // Ohne das saehe der leere Strom wie eine vollstaendige Antwort aus.
+        if let failure = events.pendingFailure() { throw failure }
         return events.reportedUsage()
     }
 
@@ -114,7 +118,8 @@ public struct ProviderDownstream: Downstream {
         StreamCollector(framing: dialect.framing) { payload in
             StreamCollector.Event(
                 delta: dialect.streamDelta(fromEventPayload: payload),
-                usage: dialect.streamUsage(fromEventPayload: payload))
+                usage: dialect.streamUsage(fromEventPayload: payload),
+                failure: dialect.streamFailure(fromEventPayload: payload))
         }
     }
 }

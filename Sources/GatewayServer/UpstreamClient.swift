@@ -74,10 +74,21 @@ public struct UpstreamClient: Sendable {
 }
 
 /// Reicht eintreffende Bruchstuecke sofort weiter, statt sie zu sammeln.
+///
+/// Prueft den HTTP-Status: die Einmal-Antwort (`send`) wirft bei 4xx/5xx, der
+/// Strom muss dasselbe tun. Antwortet ein Provider auf eine Stream-Anfrage mit
+/// 429/500, traegt der Rumpf einen Fehlerkoerper, KEINE Delta-Ereignisse —
+/// ohne Statuspruefung resuemierte die Continuation erfolgreich und der
+/// Aufrufer meldete faelschlich `status: 200`. Deshalb: bei non-2xx den Rumpf
+/// als Fehlerkoerper sammeln und die Continuation mit `.upstream` beenden.
 private final class StreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let onChunk: @Sendable (Data) -> Void
     private let onFinish: @Sendable (Error?) -> Void
     private var finished = false
+    /// 0 = Status noch unbekannt (Netzfehler vor der Antwort) → Chunks werden
+    /// durchgereicht, der Abschluss traegt den etwaigen `error`.
+    private var statusCode = 0
+    private var errorBody = Data()
     private let lock = NSLock()
 
     init(onChunk: @escaping @Sendable (Data) -> Void,
@@ -86,8 +97,25 @@ private final class StreamDelegate: NSObject, URLSessionDataDelegate, @unchecked
         self.onFinish = onFinish
     }
 
+    private var statusIsError: Bool { statusCode != 0 && !(200...299).contains(statusCode) }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        lock.lock()
+        statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        lock.unlock()
+        // Weiter empfangen — bei Fehlerstatus, um den Fehlerkoerper zu lesen.
+        completionHandler(.allow)
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        onChunk(data)
+        lock.lock()
+        let isError = statusIsError
+        if isError { errorBody.append(data) }
+        lock.unlock()
+        // Bei Fehlerstatus NICHT als Nutz-Delta durchreichen.
+        if !isError { onChunk(data) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -95,7 +123,12 @@ private final class StreamDelegate: NSObject, URLSessionDataDelegate, @unchecked
         lock.lock(); defer { lock.unlock() }
         guard !finished else { return }
         finished = true
-        onFinish(error)
+        if statusIsError {
+            onFinish(GatewayServerError.upstream(
+                status: statusCode, body: String(data: errorBody, encoding: .utf8) ?? ""))
+        } else {
+            onFinish(error)
+        }
         session.finishTasksAndInvalidate()
     }
 }
