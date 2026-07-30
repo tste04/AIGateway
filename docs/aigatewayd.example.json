@@ -53,5 +53,9 @@
     "extendedTimeToLive": 14400,
     "maxSessions": 10000
   },
+  "identity": {
+    "enabled": false,
+    "allowAnonymous": true
+  },
   "drainSeconds": 15
 }

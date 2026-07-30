@@ -193,6 +193,16 @@ Firewall-Urteil (siehe nächster Abschnitt). Fehlt der Schlüssel, läuft der
 Proxy-Betrieb auf `server.upstream`. Die Beispiel-Konfiguration lässt ihn weg,
 weil der Alleinbetrieb der Normalfall ist.
 
+**Mandanten trennen.** Der Abschnitt `identity` (`enabled: true`) schaltet den
+`SharedSecretPrincipalResolver` scharf; das Geheimnis kommt aus
+`AIGATEWAY_IDENTITY_SECRET`, nie aus der Datei. Ohne ihn ist jeder Aufrufer
+anonym und teilt sich **eine** Cache-Partition. Deshalb weist der Daemon eine
+falsch-sichere Kombination beim Start ab: `cache.enabled` zusammen mit
+`loopbackOnly: false` **ohne** Identität würde Cache-Antworten quer über
+ungetrennte Aufrufer ausspielen — entweder Identität einschalten oder auf
+Loopback binden. Auch `identity.enabled` ohne gesetztes Geheimnis ist ein
+Fehler, kein stiller Abstieg auf anonym.
+
 ### Vor einer Policy Engine statt vor einem Provider
 
 Im Zielbild liegt unter dem Gateway nicht das Modell, sondern die nächste Stufe.

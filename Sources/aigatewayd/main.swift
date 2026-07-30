@@ -133,12 +133,14 @@ let rateGuard = configuration.makeRateGuard()
 
 // Proxy- oder Stufenbetrieb. Der Unterschied ist eine Zeile hier und keine in
 // der Firewall — genau dafuer ist die `Downstream`-Naht da.
+let principals = configuration.makePrincipalResolver()
 let service: GatewayService
 if let next = configuration.nextStageURL {
     service = GatewayService(
         configuration: configuration.gateway,
         pipeline: pipeline,
         downstream: StageDownstream(url: next),
+        principals: principals,
         rateGuard: rateGuard,
         onAudit: { note("audit", auditFields($0)) },
         onCompletion: { note("completion", completionFields($0)) })
@@ -146,6 +148,7 @@ if let next = configuration.nextStageURL {
     service = GatewayService(
         configuration: configuration.gateway,
         pipeline: pipeline,
+        principals: principals,
         rateGuard: rateGuard,
         onAudit: { note("audit", auditFields($0)) },
         onCompletion: { note("completion", completionFields($0)) })

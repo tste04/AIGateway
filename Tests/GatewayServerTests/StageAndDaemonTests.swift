@@ -303,6 +303,65 @@ final class DaemonConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try parse(["embedder": ["baseURL": "http://x", "apiKey": "sk-in-file"]]))
     }
 
+    // MARK: Identitaet (M3)
+
+    private func request(subject: String?) -> HTTPRequest {
+        var headers: [String: String] = [:]
+        if let subject { headers["x-gateway-subject"] = subject }
+        return HTTPRequest(method: "POST", path: "/v1/chat/completions", headers: headers, body: Data())
+    }
+
+    func testDefaultResolverIgnoresIdentityHeaders() throws {
+        // Ohne Identitaet der anonyme Resolver: Header werden IGNORIERT, nicht
+        // geglaubt — eine Partition, niemand kann eine waehlen.
+        let resolver = try parse([:]).makePrincipalResolver()
+        guard case .anonymous = resolver.resolve(request(subject: "mallory")) else {
+            return XCTFail("der Default muss Identitaets-Header ignorieren")
+        }
+    }
+
+    func testIdentityResolverRejectsUnprovenClaim() throws {
+        let config = try parse(["identity": ["enabled": true]],
+                               environment: ["AIGATEWAY_IDENTITY_SECRET": "s3cr3t"])
+        let resolver = config.makePrincipalResolver()
+        // Eine Behauptung ohne gueltiges Geheimnis wird abgewiesen, nicht still
+        // auf anonym gestuft.
+        guard case .rejected = resolver.resolve(request(subject: "mallory")) else {
+            return XCTFail("Behauptung ohne Beleg muss 401 ergeben")
+        }
+    }
+
+    func testIdentityEnabledWithoutSecretIsRejected() {
+        // Fail-closed und laut: sonst glaubte der Betreiber, Mandanten zu
+        // trennen, waehrend alle eine Partition teilen.
+        XCTAssertThrowsError(try parse(["identity": ["enabled": true]]))
+    }
+
+    func testCacheOnPublicBindWithoutIdentityIsRejected() {
+        // Der gefaehrliche Dreiklang: Cache + oeffentlicher Bind + keine
+        // Identitaet -> der Cache spielt Antworten quer ueber ungetrennte
+        // Aufrufer aus.
+        XCTAssertThrowsError(try parse([
+            "server": ["loopbackOnly": false],
+            "cache": ["enabled": true],
+        ]))
+    }
+
+    func testCacheOnPublicBindWithIdentityIsAllowed() throws {
+        _ = try parse([
+            "server": ["loopbackOnly": false],
+            "cache": ["enabled": true],
+            "identity": ["enabled": true],
+        ], environment: ["AIGATEWAY_IDENTITY_SECRET": "s3cr3t"])
+        // kein throw: Identitaet trennt die Partitionen.
+    }
+
+    func testCacheOnLoopbackWithoutIdentityIsFine() throws {
+        // Loopback ist einmandantig-vertrauenswuerdig; der Cache darf dort ohne
+        // Identitaet laufen.
+        _ = try parse(["cache": ["enabled": true]])
+    }
+
     func testCacheIsOnlyBuiltWhenEnabled() async {
         var config = DaemonConfiguration()
         let without = await config.makePipeline().cacheStatistics()

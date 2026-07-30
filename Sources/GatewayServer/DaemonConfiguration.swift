@@ -55,6 +55,13 @@ public struct DaemonConfiguration: Sendable {
     public var embedderModel: String
     public var embedderTimeout: TimeInterval
     public var embedderAPIKey: String?
+    /// Mandanten-Identitaet ueber ein geteiltes Geheimnis. Aus = anonym (eine
+    /// Partition). Das Geheimnis kommt NUR aus der Umgebung
+    /// (`AIGATEWAY_IDENTITY_SECRET`), nie aus der Datei.
+    public var identityEnabled: Bool
+    /// Duerfen Anfragen ohne Identitaets-Header als anonym durchlaufen?
+    public var identityAllowAnonymous: Bool
+    public var identitySecret: String?
 
     public init(gateway: GatewayConfiguration = GatewayConfiguration(),
                 policy: GatewayPolicy = .standard,
@@ -71,7 +78,10 @@ public struct DaemonConfiguration: Sendable {
                 embedderPath: String = "api/embeddings",
                 embedderModel: String = "nomic-embed-text",
                 embedderTimeout: TimeInterval = 2,
-                embedderAPIKey: String? = nil) {
+                embedderAPIKey: String? = nil,
+                identityEnabled: Bool = false,
+                identityAllowAnonymous: Bool = true,
+                identitySecret: String? = nil) {
         self.gateway = gateway
         self.policy = policy
         self.pii = pii
@@ -88,6 +98,9 @@ public struct DaemonConfiguration: Sendable {
         self.embedderModel = embedderModel
         self.embedderTimeout = embedderTimeout
         self.embedderAPIKey = embedderAPIKey
+        self.identityEnabled = identityEnabled
+        self.identityAllowAnonymous = identityAllowAnonymous
+        self.identitySecret = identitySecret
     }
 
     // MARK: - Lesen
@@ -249,6 +262,13 @@ public struct DaemonConfiguration: Sendable {
         // Wie der Upstream-Schluessel: nur aus der Umgebung.
         config.embedderAPIKey = environment["AIGATEWAY_EMBEDDER_API_KEY"]
 
+        if var identity = try root.subsection("identity") {
+            if let value = identity.bool("enabled") { config.identityEnabled = value }
+            if let value = identity.bool("allowAnonymous") { config.identityAllowAnonymous = value }
+            try identity.finish()
+        }
+        config.identitySecret = environment["AIGATEWAY_IDENTITY_SECRET"]
+
         if let raw = root.string("nextStage") {
             guard let url = URL(string: raw) else {
                 throw ConfigurationError.badValue("nextStage", "not a URL")
@@ -257,6 +277,25 @@ public struct DaemonConfiguration: Sendable {
         }
         if let value = root.double("drainSeconds") { config.drainSeconds = value }
         try root.finish()
+
+        // Identitaet eingeschaltet, aber kein Geheimnis: fail-closed und LAUT.
+        // Still auf anonym zurueckzufallen liesse den Betreiber glauben, er
+        // trenne Mandanten, waehrend alle eine Partition teilen.
+        if config.identityEnabled, (config.identitySecret ?? "").isEmpty {
+            throw ConfigurationError.badValue(
+                "identity", "enabled but AIGATEWAY_IDENTITY_SECRET is unset")
+        }
+        // Der gefaehrliche Dreiklang: der Cache spielt Antworten in einer
+        // Partition aus, ein oeffentlicher Bind laesst beliebige Aufrufer an, und
+        // ohne Identitaet teilen sich ALLE dieselbe Partition — der Cache wuerde
+        // die Antwort eines Aufrufers an einen fremden ausspielen. Das ist keine
+        // Betriebswahl, sondern eine falsch-sichere Konfiguration; abweisen.
+        if config.cache.enabled, !config.gateway.loopbackOnly, !config.identityEnabled {
+            throw ConfigurationError.badValue(
+                "cache", "enabled with a non-loopback bind and no identity — the cache "
+                    + "would serve answers across unseparated callers; enable identity "
+                    + "or bind to loopback")
+        }
 
         return config
     }
@@ -365,5 +404,18 @@ public struct DaemonConfiguration: Sendable {
         guard let url = embedderBaseURL else { return nil }
         return HTTPEmbedder(baseURL: url, path: embedderPath, model: embedderModel,
                             apiKey: embedderAPIKey, timeout: embedderTimeout)
+    }
+
+    /// Stellt den Aufrufer fest. Ohne eingeschaltete Identitaet der anonyme
+    /// Resolver — er IGNORIERT Identitaets-Header, statt ihnen zu folgen (eine
+    /// Partition, niemand kann eine waehlen). Mit Identitaet der
+    /// `SharedSecretPrincipalResolver`; dass das Geheimnis dann gesetzt ist,
+    /// hat `parse` bereits fail-closed geprueft.
+    public func makePrincipalResolver() -> PrincipalResolver {
+        guard identityEnabled, let secret = identitySecret,
+              let resolver = SharedSecretPrincipalResolver(
+                secret: secret, allowAnonymous: identityAllowAnonymous)
+        else { return AnonymousPrincipalResolver() }
+        return resolver
     }
 }
