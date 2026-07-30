@@ -45,7 +45,54 @@ Erkennungsregel anzufassen.
 ### Stabile Regel-IDs statt Prosa
 Suppressions, SIEM-Korrelation und Dashboards binden an `RuleID`
 (`INJ-001`, `SEC-002`, …). Anzeigetexte sind frei umformulierbar. Eine ID zu
-ändern ist ein Breaking Change.
+ändern ist ein Breaking Change; Hinzufügen ist erlaubt.
+
+#### Registry (Stand Juli 2026)
+
+Die vollständige, verbindliche Liste. Familien: `INJ` Injection (0xx englisch,
+1xx deutsch), `SEC` Secrets, `SAN` Sanitisierung, `PII` Personendaten, `DLP`
+Data-Loss-Prevention, `MAL` Malware/Payload, `ANO` Struktur-Anomalie, `GW`
+Gateway-Guards (Form der Anfrage, nicht Inhalt).
+
+| ID | Bedeutung |
+|---|---|
+| INJ-001 | override: „ignore previous instructions" |
+| INJ-002 | override: „disregard above/system" |
+| INJ-003 | exfil: „reveal your system prompt" |
+| INJ-004 | role-override: „you are now …" |
+| INJ-005 | fake chat/role markup |
+| INJ-006 | privilege-escalation mode |
+| INJ-007 | jailbreak: DAN |
+| INJ-008 | jailbreak keyword |
+| INJ-009 | fake system-prompt delimiter |
+| INJ-010 | instruction injection: „new instructions:" |
+| INJ-011 | markdown image with query-string (Exfil-Kanal) |
+| INJ-012 | embedded network call (Exfil) |
+| INJ-013 | credential-exfiltration request |
+| INJ-101…110 | dieselben Muster auf Deutsch (Ignorieren, Rollen-Override, Entwicklermodus, Delimiter, …) |
+| SEC-001 | private-key block |
+| SEC-002 | AWS access key id |
+| SEC-003 | GitHub token |
+| SEC-004 | Slack token |
+| SEC-005 | JWT |
+| SEC-006 | api key (`sk-…`) |
+| SEC-007 | credential assignment |
+| SAN-001 | unsichtbare/Steuerzeichen entfernt |
+| SAN-002 | Bidi-Override entfernt |
+| SAN-003 | Treffer erst nach Normalisierung (Verschleierung) |
+| PII-001…007 | Person, Mail, Telefon, IBAN, Adresse, Ort, Denylist-Begriff |
+| PII-900 | Token-Dichte-Wächter (mit `abstain` der einzige PII-Block) |
+| DLP-001/002 | Klassifizierungs-Vermerk (de/en) — Default `allow` |
+| DLP-003 | interne URL/Host — Default `redact` |
+| MAL-001 | ausführbarer Payload (blockt) |
+| MAL-002 | behaupteter Typ ≠ Inhalt |
+| MAL-003 | ungeprüftes Archiv |
+| MAL-004 | übergroßer Payload |
+| ANO-001 | Größen-Anomalie |
+| GW-001 | Eingabe zu groß (`maxInputBytes`) |
+| GW-002 | Stufen-Zeitbudget gerissen |
+| GW-003 | zu viele Nachrichten (`maxMessages`) |
+| GW-004 | Rate-Limit überschritten (429) |
 
 ### Audit ohne Nutzinhalt
 `AuditEvent` enthält **niemals** Prompt, Antwort oder Treffer-Auszüge — nur
@@ -399,8 +446,6 @@ aber nicht ausgebaut. Vier Punkte sind bekannt und nicht gebaut:
 Dazu eine Grenze der zweiten Stufe: die semantische Suche ist ein linearer Lauf
 über die Einträge der Partition. Bei `maxEntries` in der Größenordnung von
 tausend ist das unkritisch; darüber bräuchte es einen Index.
-
-### Abwärts-Naht: heute Provider, später die nächste Box
 
 ### Abwärts-Naht: heute Provider, später die nächste Box
 
