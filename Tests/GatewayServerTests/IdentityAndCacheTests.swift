@@ -717,4 +717,14 @@ final class HTTPEmbedderTests: XCTestCase {
         XCTAssertNil(HTTPEmbedder.vector(from: ["error": "no model"]))
         XCTAssertNil(HTTPEmbedder.vector(from: ["embedding": [Double]()]))
     }
+
+    func testNSNumberArraysAreReadInEveryShape() {
+        // Auf Linux liefert JSONSerialization Zahlen oft als NSNumber; frueher
+        // deckte der Fallback nur den flachen embedding-Zweig ab, embeddings und
+        // data fielen durch und der Sicherungsschalter feuerte grundlos.
+        let n: (Double) -> NSNumber = { NSNumber(value: $0) }
+        XCTAssertEqual(HTTPEmbedder.vector(from: ["embedding": [n(1), n(2)]]), [1, 2])
+        XCTAssertEqual(HTTPEmbedder.vector(from: ["embeddings": [[n(3), n(4)]]]), [3, 4])
+        XCTAssertEqual(HTTPEmbedder.vector(from: ["data": [["embedding": [n(5), n(6)]]]]), [5, 6])
+    }
 }

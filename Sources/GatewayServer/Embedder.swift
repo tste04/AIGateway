@@ -70,17 +70,24 @@ public struct HTTPEmbedder: Embedder {
     }
 
     static func vector(from dict: [String: Any]) -> [Double]? {
-        if let flat = dict["embedding"] as? [Double], !flat.isEmpty { return flat }
-        if let nested = (dict["embeddings"] as? [[Double]])?.first, !nested.isEmpty { return nested }
+        if let flat = doubles(from: dict["embedding"]) { return flat }
+        if let nested = (dict["embeddings"] as? [Any])?.first, let v = doubles(from: nested) { return v }
         if let entry = (dict["data"] as? [[String: Any]])?.first,
-           let flat = entry["embedding"] as? [Double], !flat.isEmpty {
-            return flat
+           let v = doubles(from: entry["embedding"]) {
+            return v
         }
-        // JSONSerialization liefert Zahlen je nach Schreibweise als NSNumber-
-        // Array, das nicht immer direkt als [Double] durchgeht.
-        if let raw = dict["embedding"] as? [NSNumber], !raw.isEmpty {
-            return raw.map(\.doubleValue)
-        }
+        return nil
+    }
+
+    /// Liest ein Zahlen-Array, egal ob JSONSerialization es als `[Double]` oder
+    /// — auf Linux haeufig — als `[NSNumber]` geliefert hat. `nil` bei leer oder
+    /// Nicht-Array. Frueher deckte der NSNumber-Fallback nur den flachen
+    /// `embedding`-Zweig ab; die neueren `embeddings`- und `data`-Formen fielen
+    /// auf Linux durch, der Sicherungsschalter feuerte, obwohl der Dienst
+    /// korrekt geantwortet hatte.
+    static func doubles(from value: Any?) -> [Double]? {
+        if let d = value as? [Double], !d.isEmpty { return d }
+        if let n = value as? [NSNumber], !n.isEmpty { return n.map(\.doubleValue) }
         return nil
     }
 }
