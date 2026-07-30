@@ -186,6 +186,13 @@ beenden geordnet — kein Zulauf mehr, laufende Anfragen zu Ende, dann Schluss;
 läuft die Auslauffrist ab, sagt der Daemon das (`drained: false`) und endet mit
 Exit-Code 1, statt einen sauberen Stopp zu behaupten.
 
+Ein optionaler Wurzel-Schlüssel `"nextStage"` (eine URL) schaltet den Daemon
+vom Proxy- in den **Stufenbetrieb**: statt an den konfigurierten Provider
+reicht er dann an diese Adresse weiter — die kanonische, maskierte Anfrage samt
+Firewall-Urteil (siehe nächster Abschnitt). Fehlt der Schlüssel, läuft der
+Proxy-Betrieb auf `server.upstream`. Die Beispiel-Konfiguration lässt ihn weg,
+weil der Alleinbetrieb der Normalfall ist.
+
 ### Vor einer Policy Engine statt vor einem Provider
 
 Im Zielbild liegt unter dem Gateway nicht das Modell, sondern die nächste Stufe.
