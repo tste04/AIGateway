@@ -108,5 +108,4 @@ public enum GatewayServerError: Error, Sendable, Equatable {
     case malformedRequest(String)
     case upstream(status: Int, body: String)
     case unsupported(String)
-    case blocked(reason: String)
 }
