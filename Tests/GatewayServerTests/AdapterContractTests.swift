@@ -72,6 +72,20 @@ final class AdapterRejectionTests: XCTestCase {
         }
     }
 
+    func testBlockWithBothTextAndBinaryIsStillRejected() throws {
+        // Der eigentliche M9-Fall: ein Bildblock, der zusaetzlich ein text-Feld
+        // traegt, rutschte an der alten "hat kein text"-Pruefung vorbei und das
+        // Binaere wurde still verworfen. Positive Erkennung faengt ihn.
+        let block: [String: Any] = [
+            "role": "user",
+            "content": [
+                ["type": "image_url", "text": "tarnung", "image_url": ["url": "data:image/png;base64,AAAA"]],
+            ],
+        ]
+        XCTAssertThrowsError(try decode(OpenAIAdapter(), ["model": "m", "messages": [block]]),
+                             "ein Binaerblock mit text-Feld darf nicht durchrutschen")
+    }
+
     func testTextOnlyBlockArrayIsAccepted() throws {
         let block: [String: Any] = [
             "role": "user",

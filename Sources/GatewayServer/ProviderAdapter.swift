@@ -153,9 +153,28 @@ enum JSONHelper {
     /// beim Flachklopfen spurlos. Ein still verworfener Bildanhang ist
     /// dieselbe Fehlerklasse wie ein still entferntes `tools` — der Aufrufer
     /// bekaeme eine Antwort auf eine ANDERE Anfrage als die gestellte.
+    /// Bekannte Binaer-Blocktypen der drei Dialekte. Erweitern ist ungefaehrlich
+    /// (fail-closed), Weglassen liesse einen Anhang still verschwinden.
+    static let binaryBlockTypes: Set<String> = [
+        "image", "image_url", "input_image", "file", "input_file",
+        "audio", "input_audio", "document", "video",
+    ]
+
+    /// Erkennt Binaerbloecke POSITIV an ihrem Typ oder ihren Containern — nicht
+    /// negativ am fehlenden `text`. Der Unterschied ist der Angriff: ein Block
+    /// mit BEIDEM (`{"type":"image_url","text":"…","image_url":{…}}`) traegt ein
+    /// `text`-Feld und rutschte an einer „hat kein text"-Pruefung vorbei; das
+    /// Binaere wuerde still verworfen, und der Aufrufer bekaeme eine Antwort auf
+    /// eine andere Anfrage als die gestellte.
     static func carriesNonTextBlocks(_ value: Any?) -> Bool {
         guard let blocks = value as? [[String: Any]] else { return false }
-        return blocks.contains { $0["text"] == nil }
+        return blocks.contains { block in
+            if let type = block["type"] as? String, binaryBlockTypes.contains(type) { return true }
+            // Auch ohne bekannten `type`: die verraeterischen Container.
+            return block["image_url"] != nil || block["source"] != nil
+                || block["input_image"] != nil || block["file"] != nil
+                || block["audio"] != nil || block["data"] != nil
+        }
     }
 
     static func messages(from raw: Any?) throws -> [ChatMessage] {
