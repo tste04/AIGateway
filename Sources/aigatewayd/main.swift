@@ -31,13 +31,22 @@ import Glibc
 // alles auf oberster Ebene der Reihe nach, und die Lesereihenfolge soll der
 // Ausfuehrungsreihenfolge entsprechen.
 
+/// Serialisiert die Log-Ausgabe. Der Daemon ist thread-per-connection; ohne
+/// Sperre verschraenkten sich die Writes zweier Ereignisse zu kaputten
+/// JSON-Lines im Audit-Pfad.
+let noteLock = NSLock()
+
 func note(_ event: String, _ fields: [String: Any] = [:]) {
     var line = fields
     line["event"] = event
-    let data = (try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]))
+    var data = (try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]))
         ?? Data(#"{"event":"log-encoding-failed"}"#.utf8)
+    // Newline an dieselbe `Data` haengen und in EINEM Write ausgeben — zwei
+    // getrennte Writes konnten sich zwischen Threads ueberkreuzen.
+    data.append(0x0A)
+    noteLock.lock()
     FileHandle.standardError.write(data)
-    FileHandle.standardError.write(Data("\n".utf8))
+    noteLock.unlock()
 }
 
 func fail(_ message: String) -> Never {
