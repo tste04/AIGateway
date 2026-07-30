@@ -78,6 +78,10 @@ public actor GatewayPipeline {
     /// alle sieht.
     private var embedderFailures = 0
     private var embedderOpenUntil: Date?
+    /// Ein Embed-Aufruf ist gerade ausstehend. Verhindert, dass Actor-Reentrancy
+    /// waehrend der `embed`-Suspendierung mehrere Aufrufer in denselben
+    /// (moeglicherweise haengenden) Embedder schickt.
+    private var embedderInFlight = false
 
     public init(injection: InjectionScanner = InjectionScanner(),
                 pii: PIIGate? = nil,
@@ -371,11 +375,21 @@ public actor GatewayPipeline {
     /// Vektor. Der Cache verliert also Reichweite, nie Funktion.
     private func embedding(for prompt: String, policy cachePolicy: SemanticCachePolicy) async -> [Double]? {
         guard let embedder else { return nil }
+        // Nur EIN ausstehender Embed-Aufruf gleichzeitig. `embed` suspendiert an
+        // seinem `await`, und der Actor ist waehrenddessen frei (Reentrancy):
+        // ohne diese Sperre liefen beliebig viele parallele `process`-Aufrufe in
+        // einen HAENGENDEN Embedder, bevor `embedderFailures` ueberhaupt
+        // hochzaehlen kann — der Schalter schuetzte gerade unter Last am
+        // schlechtesten. Ein zweiter Aufrufer ueberspringt die semantische Stufe
+        // (nil) statt sich anzustellen; der exakte Treffer laeuft ohnehin weiter.
+        if embedderInFlight { return nil }
         if let openUntil = embedderOpenUntil {
             guard Date() >= openUntil else { return nil }
             // Frist abgelaufen: EIN Probelauf entscheidet, ob wieder gefragt wird.
             embedderOpenUntil = nil
         }
+        embedderInFlight = true
+        defer { embedderInFlight = false }
         do {
             let vector = try await embedder.embed(prompt)
             embedderFailures = 0
