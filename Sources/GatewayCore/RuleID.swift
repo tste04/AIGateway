@@ -3,7 +3,7 @@
 
 import Foundation
 
-// MARK: - Stabile Regel-Identität
+// MARK: - Stabile Regel-Identitaet
 //
 // Jeder Befund traegt eine ID, die sich NIE aendert. Prosa-Texte sind
 // Anzeige-Material und duerfen umformuliert werden; Suppressions, SIEM-Regeln

@@ -304,7 +304,7 @@ ergänzt Datenminimierung, sie ersetzt sie nicht.
 Swift 5.7+, macOS 12+ / Linux. Einzige Abhängigkeit: `Foundation`.
 
 ```bash
-swift build                  # alle drei Targets
+swift build                  # alle vier Targets
 swift test                   # gesamte Suite
 swift build -c release
 ```

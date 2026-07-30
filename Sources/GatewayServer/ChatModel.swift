@@ -49,7 +49,7 @@ public struct ChatRequest: Sendable, Codable, Equatable {
     public var temperature: Double?
     public var maxTokens: Int?
     /// Binaere Anhaenge. Werden von den HTTP-Adaptern derzeit NICHT befuellt:
-    /// die Dialekte tragen Bilder in Inhaltsblöcken, und die weiterzureichen
+    /// die Dialekte tragen Bilder in Inhaltsbloecken, und die weiterzureichen
     /// waere echte Multimodalitaet, die dieses Repo noch nicht baut. Statt sie
     /// still fallen zu lassen, weisen die Adapter solche Anfragen ab. Wer die
     /// Bibliothek direkt benutzt, fuellt das Feld selbst — und bekommt damit
