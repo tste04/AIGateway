@@ -4,22 +4,23 @@
 import XCTest
 @testable import GatewayServer
 
-// MARK: - EventStreamParser: Chunk-Grenzen zerstoeren keine Zeichen
+// MARK: - EventStreamParser: Chunk-Grenzen zerstoeren keine Zeichen (M2)
 //
-// Der Parser puffert auf Bytes, damit eine Mehrbyte-UTF-8-Sequenz, die ueber
-// zwei Netz-Chunks zerfaellt, nicht durch U+FFFD ersetzt wird. Fuer
-// deutschsprachigen Inhalt ist der Fall realistisch: URLSession schneidet an
-// beliebigen TCP-Grenzen.
+// Die Zeilen-Pufferung ueber Chunk-Grenzen ist bereits in
+// GatewayServerTests.EventStreamParserTests belegt. Hier steht der Fall, der
+// vorher fehlschlug: eine Mehrbyte-UTF-8-Sequenz, die MITTEN zwischen ihren
+// Bytes zerschnitten wird, darf nicht durch U+FFFD ersetzt werden. Fuer
+// deutschsprachigen Inhalt realistisch — URLSession schneidet an beliebigen
+// TCP-Grenzen.
 
-final class EventStreamParserTests: XCTestCase {
+final class EventStreamParserUTF8Tests: XCTestCase {
 
     func testMultibyteCharSplitAcrossChunksIsNotCorrupted() {
         var parser = EventStreamParser(framing: .newlineDelimitedJSON)
 
         // Zeile: {"m":"gruen"} mit echtem ue = U+00FC (0xC3 0xBC), plus \n.
         var line = Data(#"{"m":"gr"#.utf8)
-        let ue: [UInt8] = [0xC3, 0xBC]   // ue
-        line.append(contentsOf: ue)
+        line.append(contentsOf: [0xC3, 0xBC] as [UInt8])   // ue
         line.append(Data(#"n"}"#.utf8))
         line.append(0x0A)
 
@@ -32,23 +33,5 @@ final class EventStreamParserTests: XCTestCase {
         XCTAssertEqual(second, [#"{"m":"grün"}"#])
         XCTAssertFalse((second.first ?? "").contains("\u{FFFD}"),
                        "kein Ersetzungszeichen — die Sequenz blieb im Byte-Puffer")
-    }
-
-    func testMultipleLinesInOneChunk() {
-        var parser = EventStreamParser(framing: .newlineDelimitedJSON)
-        let payloads = parser.consume(Data("a\nb\nc\n".utf8))
-        XCTAssertEqual(payloads, ["a", "b", "c"])
-    }
-
-    func testSSEOnlyDataLinesCarryPayload() {
-        var parser = EventStreamParser(framing: .serverSentEvents)
-        let payloads = parser.consume(Data("event: ping\ndata: hallo\nid: 7\n".utf8))
-        XCTAssertEqual(payloads, ["hallo"])
-    }
-
-    func testIncompleteTrailingLineIsHeldUntilNewline() {
-        var parser = EventStreamParser(framing: .newlineDelimitedJSON)
-        XCTAssertEqual(parser.consume(Data("teil".utf8)), [])
-        XCTAssertEqual(parser.consume(Data("weise\n".utf8)), ["teilweise"])
     }
 }
