@@ -107,22 +107,35 @@ private final class StreamDelegate: NSObject, URLSessionDataDelegate, @unchecked
 ///
 /// Puffert unvollstaendige Zeilen — ein Ereignis darf ueber Chunk-Grenzen
 /// zerfallen, genau wie ein Platzhalter im `StreamRewriter`.
+///
+/// Gepuffert wird auf BYTES, nicht auf einem String. `String(decoding: data,
+/// as: UTF8.self)` je Netz-Chunk waere ein Datenfehler: URLSession liefert die
+/// Bruchstuecke an beliebigen TCP-Grenzen, und endet ein Chunk mitten in einer
+/// Mehrbyte-Sequenz (Umlaut, Emoji), ersetzte das Dekodieren sie durch U+FFFD
+/// — die Fortsetzungsbytes des naechsten Chunks ebenso. Erst an der
+/// Zeilengrenze (0x0A, immer ein einzelnes ASCII-Byte, das keine Sequenz
+/// zerschneidet) wird dekodiert; die angebrochene Sequenz bleibt im
+/// Byte-Puffer, bis ihre restlichen Bytes ankommen.
 public struct EventStreamParser {
 
     private let framing: StreamFraming
-    private var buffer = ""
+    private var buffer = Data()
 
     public init(framing: StreamFraming) {
         self.framing = framing
     }
 
     public mutating func consume(_ data: Data) -> [String] {
-        buffer += String(decoding: data, as: UTF8.self)
+        buffer.append(data)
         var payloads: [String] = []
 
-        while let newline = buffer.firstIndex(of: "\n") {
-            let line = String(buffer[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
-            buffer = String(buffer[buffer.index(after: newline)...])
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let lineBytes = buffer[buffer.startIndex..<newline]
+            // `Data(...)` rebasiert die Indizes des Restes auf 0 — sonst
+            // driftete `startIndex` mit jeder Zeile weiter.
+            buffer = Data(buffer[buffer.index(after: newline)...])
+            let line = String(decoding: lineBytes, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
 
             switch framing {
