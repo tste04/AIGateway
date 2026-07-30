@@ -72,7 +72,7 @@ public struct PseudonymizationPolicy: Codable, Sendable, Equatable {
     /// semantisch entkernt gilt (Default 0.35).
     public var maxTokenDensity: Double?
     /// Reaktion auf zu dichte Treffer:
-    /// "warn" (nur Befund, Default) · "trim" · "abstain" (blockt).
+    /// "warn" (nur Befund, Default) · "abstain" (blockt).
     public var onDensityExceeded: String?
 
     public init(enabled: Bool = false, disabledCategories: [String]? = nil,
@@ -98,7 +98,10 @@ public struct PseudonymizationPolicy: Codable, Sendable, Equatable {
     // MARK: Aufloesung
 
     public enum Mode: String, Sendable { case off, token, alias }
-    public enum DensityAction: String, Sendable { case warn, trim, abstain }
+    /// `warn` protokolliert nur, `abstain` blockt. Ein frueher angebotenes
+    /// `trim` war nie umgesetzt und fiel still in `warn` — als scheinbare
+    /// Option schlimmer als keine, deshalb entfernt.
+    public enum DensityAction: String, Sendable { case warn, abstain }
 
     /// Wirksamer Modus einer Kategorie: explizite Feinsteuerung > disabled >
     /// Denylist-Sonderfall > Profil.
