@@ -147,6 +147,12 @@ Plus die in Abschnitt 2 genannten M9/M10-Tests.
 
 ## 6. Umsetzungs-Roadmap (geordnete Commits)
 
+> **Stand 2026-07-30: alle 32 Roadmap-Commits sind umgesetzt und auf `main`
+> gepusht.** Jede Welle wurde per CI abgenommen (Ubuntu + macOS, Zeile
+> `Executed N tests, with 0 failures` gelesen); die Suite ist dabei von 326
+> auf über 370 Tests gewachsen. Die Befunde M1–M10 sind damit geschlossen,
+> die Verzichtsentscheidungen aus Abschnitt 7 gelten unverändert.
+
 Reihenfolge: erst Netz (Tests/Absicherung), dann Fixes, dann neue Bausteine. Jeder Commit ist klein genug für einen CI-Lauf. **Abnahme ist die CI** — nach jedem Push den Lauf abwarten und die Zeile `Executed N tests, with 0 failures` lesen.
 
 **A — Netz zuerst (Tests, die aktuelles Verhalten festnageln, bevor etwas geändert wird)**
