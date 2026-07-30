@@ -168,6 +168,10 @@ final class DaemonConfigurationTests: XCTestCase {
     }
 
     func testSectionsAreRead() throws {
+        // Der oeffentliche Bind mit aktivem Cache ist nur mit Identitaet eine
+        // zulaessige Kombination (Fail-closed-Kreuzpruefung, M3) — deshalb traegt
+        // die Fixtur eine identity-Sektion samt Geheimnis, sonst wiese der Parser
+        // sie zu Recht ab, bevor eine Feld-Zusicherung greift.
         let config = try parse([
             "server": ["port": 9000, "loopbackOnly": false, "upstream": "anthropic"],
             "policy": ["blockThreshold": 0.5, "maxMessages": 12, "failClosed": false],
@@ -176,9 +180,10 @@ final class DaemonConfigurationTests: XCTestCase {
             "rateLimit": ["enabled": true, "burst": 3],
             "quarantine": ["enabled": true, "detail": "counts"],
             "maskingSessions": ["enabled": true, "timeToLive": 60],
+            "identity": ["enabled": true],
             "nextStage": "https://policy.internal/v1/decide",
             "drainSeconds": 5,
-        ])
+        ], environment: ["AIGATEWAY_IDENTITY_SECRET": "s3cr3t"])
 
         XCTAssertEqual(config.gateway.port, 9000)
         XCTAssertFalse(config.gateway.loopbackOnly)
