@@ -180,12 +180,24 @@ public actor PseudonymVault {
     /// Fuer den Antwortpfad ist `MaskingSession.unmask` vorzuziehen — die traegt
     /// exakt die Zuordnung DIESER Anfrage.
     func restore(_ text: String) -> String {
-        var out = text
+        guard !text.isEmpty, !tokenToValue.isEmpty else { return text }
+        // Alle Suchformen (Token UND Alias-Name) einsammeln und LAENGSTE zuerst
+        // ersetzen — genau wie `MaskingSession.unmask`. Sonst zerlegt eine
+        // kuerzere Form eine laengere: `[Person-1]` ist ein Praefix von
+        // `[Person-10]`, und der Alias `Alex A.` ist einer von `Alex A.1`. Die
+        // Reihenfolge darf NICHT von der Dictionary-Iteration abhaengen — Swift
+        // wuerfelt den Hash-Seed je Prozess, sonst waere die Ersetzung ein
+        // Muenzwurf (genau die Fehlerklasse, vor der CLAUDE.md warnt).
+        var forms: [(search: String, value: String)] = []
         for (token, value) in tokenToValue {
-            out = out.replacingOccurrences(of: token, with: value)
+            forms.append((token, value))
             if let alias = Pseudonymizer.aliasName(forToken: token) {
-                out = out.replacingOccurrences(of: alias, with: value)
+                forms.append((alias, value))
             }
+        }
+        var out = text
+        for form in forms.sorted(by: { $0.search.count > $1.search.count }) {
+            out = out.replacingOccurrences(of: form.search, with: form.value)
         }
         return out
     }
