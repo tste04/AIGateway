@@ -271,28 +271,13 @@ public struct InjectionScanner: ContentScanner {
 
     /// Secret-Formate. Ueberwiegend case-sensitiv geprueft — Token-Formate
     /// sind es auch, und Kleinschreibung erzeugt sonst Falschtreffer in Prosa.
-    public static let defaultSecretRules: [InjectionRule] = [
-        InjectionRule(id: "SEC-001", category: .secret, severity: .critical, weight: 0.45,
-                      message: "secret: private-key block",
-                      pattern: #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#, caseSensitive: true),
-        InjectionRule(id: "SEC-002", category: .secret, severity: .high, weight: 0.40,
-                      message: "secret: AWS access key id",
-                      pattern: #"\bAKIA[0-9A-Z]{16}\b"#, caseSensitive: true),
-        InjectionRule(id: "SEC-003", category: .secret, severity: .high, weight: 0.40,
-                      message: "secret: GitHub token",
-                      pattern: #"\bgh[pousr]_[A-Za-z0-9]{36,}\b"#, caseSensitive: true),
-        InjectionRule(id: "SEC-004", category: .secret, severity: .high, weight: 0.40,
-                      message: "secret: Slack token",
-                      pattern: #"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"#, caseSensitive: true),
-        InjectionRule(id: "SEC-005", category: .secret, severity: .medium, weight: 0.35,
-                      message: "secret: JWT",
-                      pattern: #"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"#,
-                      caseSensitive: true),
-        InjectionRule(id: "SEC-006", category: .secret, severity: .medium, weight: 0.35,
-                      message: "secret: api key (sk-...)",
-                      pattern: #"\bsk-[A-Za-z0-9_-]{20,}\b"#),
-        InjectionRule(id: "SEC-007", category: .secret, severity: .medium, weight: 0.35,
-                      message: "secret: credential assignment",
-                      pattern: #"(api[_-]?key|client[_-]?secret|access[_-]?token)\s*[:=]\s*['"][A-Za-z0-9_\-/+]{16,}['"]"#),
-    ].compactMap { $0 }
+    ///
+    /// Gebaut aus `defaultSecretPatterns` (siehe SecretPatterns.swift): dieselben
+    /// Muster gewichtet HIER (Erkennung) und redigiert die DLP-Stufe. Eine
+    /// zweite Kopie der Regexe wuerde auseinanderdriften.
+    public static let defaultSecretRules: [InjectionRule] = defaultSecretPatterns.compactMap {
+        InjectionRule(id: $0.injectionID, category: .secret, severity: $0.severity,
+                      weight: $0.weight, message: "secret: \($0.label)",
+                      pattern: $0.pattern, caseSensitive: $0.caseSensitive)
+    }
 }

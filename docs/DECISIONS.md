@@ -84,6 +84,7 @@ Gateway-Guards (Form der Anfrage, nicht Inhalt).
 | PII-900 | Token-Dichte-Wächter (mit `abstain` der einzige PII-Block) |
 | DLP-001/002 | Klassifizierungs-Vermerk (de/en) — Default `allow` |
 | DLP-003 | interne URL/Host — Default `redact` |
+| DLP-010…016 | Secret-Redaktion (private key, AWS, GitHub, Slack, JWT, `sk-…`, credential assignment) — dieselben Muster wie SEC-00x, aber `redact` |
 | MAL-001 | ausführbarer Payload (blockt) |
 | MAL-002 | behaupteter Typ ≠ Inhalt |
 | MAL-003 | ungeprüftes Archiv |
@@ -607,6 +608,20 @@ den Schaden wirklich.
 Daraus die Faustregel für jede weitere Regel: `redact` ist richtig, wenn die
 Fundstelle der Schaden ist; ist sie nur sein Anzeiger, gehört sie in den
 Audit, nicht in den Papierkorb.
+
+**Nachtrag (Juli 2026): Secrets werden redigiert, nicht nur erkannt (DLP-010…016).**
+Die Injection-Stufe erkennt Zugangsdaten-Formate (SEC-00x) und gibt ihnen
+Gewicht, aber ein einzelnes Secret in einer `user`-Nachricht (neutral 1.0)
+bleibt unter der Blockschwelle — es würde sonst verbatim zum Drittanbieter
+gehen und, weil der Cache-Schlüssel aus dem Text entsteht, in den Cache-Index.
+Eine Erkennung ohne Handlung ist ein Leck mit Logzeile. Die Secret-Formate
+liegen deshalb zusätzlich als `redact`-Regeln im DLP-Katalog (`[SECRET]`,
+einweg — für Zugangsdaten gibt es keinen legitimen Rückweg). Erkennung und
+Redaktion teilen **eine** Musterquelle (`defaultSecretPatterns`): zwei Kopien
+derselben Regexe würden auseinanderdriften. Der Ort ist die DLP-Stufe, weil sie
+nach der Maskierung und **vor** dem Cache-Schlüssel läuft — die Redaktion greift
+also vor beiden Lecks. Voraussetzung ist, dass die DLP-Stufe aktiv ist; wer sie
+abschaltet, verzichtet bewusst auch auf die Secret-Redaktion.
 
 **Malware ist eine Naht, keine Engine.** Signaturen zu pflegen ist eine eigene
 Industrie; ein selbstgebauter Scanner wäre dasselbe Fehlurteil wie ein

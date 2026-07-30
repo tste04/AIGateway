@@ -174,5 +174,10 @@ public struct DLPScanner: ContentScanner {
                 message: "internal URL or host",
                 pattern: #"\bhttps?://[A-Za-z0-9.-]*\.(intern|internal|local|lan|corp)\b[^\s]*"#,
                 replacement: "[INTERNAL-URL]"),
-    ].compactMap { $0 }
+    ].compactMap { $0 } + defaultSecretDLPRules
+    // Secret-Formate (DLP-01x) werden redigiert, nicht nur gemeldet: die
+    // Injection-Stufe erkennt sie (SEC-00x, Gewicht), aber ein einzelnes Secret
+    // scort unter der Blockschwelle. DLP laeuft nach der Maskierung und VOR dem
+    // Cache-Schluessel, entfernt das Secret also, bevor es den Provider oder den
+    // Cache-Index erreicht. Einweg: kein Rueckweg fuer Zugangsdaten.
 }
