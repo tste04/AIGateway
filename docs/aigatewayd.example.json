@@ -5,7 +5,10 @@
     "upstream": "ollama",
     "upstreamBaseURL": "http://127.0.0.1:11434",
     "maxBodyBytes": 1000000,
-    "debugErrorDetails": false
+    "debugErrorDetails": false,
+    "readTimeoutSeconds": 30,
+    "maxConcurrentConnections": 64,
+    "upstreamTimeoutSeconds": 120
   },
   "policy": {
     "blockThreshold": 0.7,

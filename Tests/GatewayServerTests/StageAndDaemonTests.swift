@@ -308,6 +308,17 @@ final class DaemonConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try parse(["embedder": ["baseURL": "http://x", "apiKey": "sk-in-file"]]))
     }
 
+    func testOperationalLimitsAreConfigurable() throws {
+        let config = try parse(["server": [
+            "readTimeoutSeconds": 10,
+            "maxConcurrentConnections": 128,
+            "upstreamTimeoutSeconds": 45,
+        ]])
+        XCTAssertEqual(config.gateway.readTimeoutSeconds, 10)
+        XCTAssertEqual(config.gateway.maxConcurrentConnections, 128)
+        XCTAssertEqual(config.gateway.upstreamTimeoutSeconds, 45)
+    }
+
     // MARK: Identitaet (M3)
 
     private func request(subject: String?) -> HTTPRequest {

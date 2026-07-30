@@ -161,6 +161,15 @@ public struct DaemonConfiguration: Sendable {
             }
             if let bytes = server.int("maxBodyBytes") { config.gateway.maxBodyBytes = bytes }
             if let debug = server.bool("debugErrorDetails") { config.gateway.debugErrorDetails = debug }
+            if let value = server.int("readTimeoutSeconds") {
+                config.gateway.readTimeoutSeconds = value
+            }
+            if let value = server.int("maxConcurrentConnections") {
+                config.gateway.maxConcurrentConnections = value
+            }
+            if let value = server.double("upstreamTimeoutSeconds") {
+                config.gateway.upstreamTimeoutSeconds = value
+            }
             try server.finish()
         }
 

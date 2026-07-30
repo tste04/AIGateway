@@ -26,12 +26,23 @@ public struct GatewayConfiguration: Sendable {
     /// fremder Fehlerkoerper). Betreiber korrelieren stattdessen ueber die
     /// `correlation_id` mit dem Audit-Log.
     public var debugErrorDetails: Bool
+    /// Betriebsgrenzen des HTTP-Servers, an die Last anpassbar. Ihre
+    /// Begruendung steht in `HTTPServer`; hier sind sie nur durchgereicht,
+    /// damit ein Betreiber sie ohne Neucompilat setzen kann.
+    public var readTimeoutSeconds: Int
+    public var maxConcurrentConnections: Int
+    /// Zeitlimit fuer den Upstream-Aufruf. Nur im Proxy-Betrieb wirksam (der
+    /// bequeme Konstruktor baut daraus den `UpstreamClient`).
+    public var upstreamTimeoutSeconds: TimeInterval
 
     public init(port: UInt16 = 8080, loopbackOnly: Bool = true,
                 upstream: ProviderKind = .ollama,
                 upstreamBaseURL: URL = URL(string: "http://127.0.0.1:11434")!,
                 apiKey: String? = nil, maxBodyBytes: Int = 1_000_000,
-                debugErrorDetails: Bool = false) {
+                debugErrorDetails: Bool = false,
+                readTimeoutSeconds: Int = 30,
+                maxConcurrentConnections: Int = 64,
+                upstreamTimeoutSeconds: TimeInterval = 120) {
         self.port = port
         self.loopbackOnly = loopbackOnly
         self.upstream = upstream
@@ -39,6 +50,9 @@ public struct GatewayConfiguration: Sendable {
         self.apiKey = apiKey
         self.maxBodyBytes = maxBodyBytes
         self.debugErrorDetails = debugErrorDetails
+        self.readTimeoutSeconds = readTimeoutSeconds
+        self.maxConcurrentConnections = maxConcurrentConnections
+        self.upstreamTimeoutSeconds = upstreamTimeoutSeconds
     }
 }
 
@@ -59,18 +73,20 @@ public final class GatewayService: @unchecked Sendable {
     /// Provider.
     public convenience init(configuration: GatewayConfiguration,
                            pipeline: GatewayPipeline,
-                           client: UpstreamClient = UpstreamClient(),
+                           client: UpstreamClient? = nil,
                            principals: PrincipalResolver = AnonymousPrincipalResolver(),
                            rateGuard: RateGuard? = nil,
                            onAudit: (@Sendable (AuditEvent) -> Void)? = nil,
                            onCompletion: (@Sendable (CompletionEvent) -> Void)? = nil) {
+        // Ohne uebergebenen Client einen mit dem konfigurierten Upstream-Timeout
+        // bauen — sonst bliebe `upstreamTimeoutSeconds` wirkungslos.
         self.init(configuration: configuration,
                   pipeline: pipeline,
                   downstream: ProviderDownstream(
                     dialect: Providers.adapter(for: configuration.upstream),
                     baseURL: configuration.upstreamBaseURL,
                     apiKey: configuration.apiKey,
-                    client: client),
+                    client: client ?? UpstreamClient(timeout: configuration.upstreamTimeoutSeconds)),
                   principals: principals,
                   rateGuard: rateGuard,
                   onAudit: onAudit,
@@ -103,7 +119,10 @@ public final class GatewayService: @unchecked Sendable {
     public func start() throws {
         let server = HTTPServer(port: configuration.port,
                                 loopbackOnly: configuration.loopbackOnly,
-                                maxBodyBytes: configuration.maxBodyBytes) { [weak self] request, connection in
+                                maxBodyBytes: configuration.maxBodyBytes,
+                                readTimeoutSeconds: configuration.readTimeoutSeconds,
+                                maxConcurrentConnections: configuration.maxConcurrentConnections) {
+            [weak self] request, connection in
             await self?.handle(request, connection)
         }
         self.server = server
