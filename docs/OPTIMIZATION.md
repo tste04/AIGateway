@@ -57,7 +57,7 @@ Schwerer als zu viele Kommentare: falsche.
 
 Der Satz „die Cache-Partition ist absichtlich geteilt, das Rate-Kontingent darf
 es nicht sein" steht ausformuliert in `Principal.swift`, `RateGuard.swift`,
-`CLAUDE.md` und `docs/DECISIONS.md`. Vier Fassungen desselben Gedankens driften
+`CONTRIBUTING.md` und `docs/DECISIONS.md`. Vier Fassungen desselben Gedankens driften
 auseinander, sobald eine geändert wird. Dasselbe gilt für „maskiert vor dem
 Cache-Schlüssel" (drei Orte) und „geschätzt wird nie" (vier Orte).
 

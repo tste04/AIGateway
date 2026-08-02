@@ -187,7 +187,7 @@ public actor PseudonymVault {
         // `[Person-10]`, und der Alias `Alex A.` ist einer von `Alex A.1`. Die
         // Reihenfolge darf NICHT von der Dictionary-Iteration abhaengen — Swift
         // wuerfelt den Hash-Seed je Prozess, sonst waere die Ersetzung ein
-        // Muenzwurf (genau die Fehlerklasse, vor der CLAUDE.md warnt).
+        // Muenzwurf (genau die Fehlerklasse, vor der CONTRIBUTING.md warnt).
         var forms: [(search: String, value: String)] = []
         for (token, value) in tokenToValue {
             forms.append((token, value))

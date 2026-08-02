@@ -66,7 +66,7 @@ Die Injection-Stufe erkennt Credential-Formate (SEC-001..007) mit Gewichten 0.35
 **Fix:** Absoluten Deadline je Verbindung vor der ersten Lesung berechnen (`Date().addingTimeInterval(readTimeoutSeconds)`) und in beiden Schleifen je Durchlauf gegen `Date()` prüfen; bei Überschreitung schließen. Irreführende Kommentare korrigieren.
 
 ### M9 — Binärblock-Ablehnung ungetestet + per `text`-Feld umgehbar
-Zwei verwandte Facetten derselben Naht (dimensionsübergreifend entdoppelt). **(a) Bug:** `carriesNonTextBlocks` flaggt einen Block nur bei **Abwesenheit** eines `text`-Schlüssels (`return blocks.contains { $0["text"] == nil }`, `ProviderAdapter.swift:130-133`). Ein Block mit **beidem** — Binärdaten und `text` (z. B. `{"type":"image_url","text":"…","image_url":{…}}`) — passiert die Prüfung; `flattenContent` extrahiert nur den Text, das Binäre wird still verworfen. Das verletzt die „refuse, don't drop"-Invariante (der Angreifer erzielt keinen Upstream-Schmuggel, da `ChatRequest` nur Text trägt — daher der Bug allein *low*). **(b) Test:** Der Ablehnungspfad (`messages()` wirft `.unsupported`, `:135-145`) hat **keinen Test** (grep leer) — laut CLAUDE.md eine fail-closed-Sicherheitsnaht, dieselbe Fehlerklasse wie still entferntes `tools`. Zusammengenommen medium.
+Zwei verwandte Facetten derselben Naht (dimensionsübergreifend entdoppelt). **(a) Bug:** `carriesNonTextBlocks` flaggt einen Block nur bei **Abwesenheit** eines `text`-Schlüssels (`return blocks.contains { $0["text"] == nil }`, `ProviderAdapter.swift:130-133`). Ein Block mit **beidem** — Binärdaten und `text` (z. B. `{"type":"image_url","text":"…","image_url":{…}}`) — passiert die Prüfung; `flattenContent` extrahiert nur den Text, das Binäre wird still verworfen. Das verletzt die „refuse, don't drop"-Invariante (der Angreifer erzielt keinen Upstream-Schmuggel, da `ChatRequest` nur Text trägt — daher der Bug allein *low*). **(b) Test:** Der Ablehnungspfad (`messages()` wirft `.unsupported`, `:135-145`) hat **keinen Test** (grep leer) — laut CONTRIBUTING.md eine fail-closed-Sicherheitsnaht, dieselbe Fehlerklasse wie still entferntes `tools`. Zusammengenommen medium.
 **Fix:** Ablehnung auf **positive** Binär-Erkennung stützen (`type ∈ {image, image_url, input_image, file, audio}` oder Präsenz von `image_url`/`source`/`data`), nicht auf fehlendes `text`. Tests: `testMessageWithBinaryContentBlockIsRejectedNotDropped` (OpenAI + Anthropic), Gegenprobe `testTextOnlyBlockArrayIsAccepted`.
 
 ### M10 — HTTP-Parser und Fehlerpfade ungetestet
@@ -105,7 +105,7 @@ Nicht als „fehlender Baustein" gewertet, aber verwandt: **Slowloris-Deadline**
 - **`serve`-Semaphore-Brücke** (`HTTPServer.swift:329`, PLAUSIBLE, informational): `done.wait()` blockiert je Anfrage einen dedizierten OS-Thread; kein aktueller Fehler (nicht-kooperativer Thread, Deckel = `maxConcurrentConnections`), aber deadlock-anfällig, falls der Handler je auf denselben begrenzten Executor gelegt würde. **Fix:** Invariante als Kommentar festhalten; später ggf. auf strukturiertes `await` umstellen.
 
 **Determinismus/Robustheit (low):**
-- **`PseudonymVault.restore` nichtdeterministisch + Alias-Präfix-Kollision** (`PseudonymVault.swift:184`): iteriert `tokenToValue` in Dictionary-Reihenfolge und sortiert die Ersatzformen **nicht** — anders als `MaskingSession.unmask` (`PIIGate.swift:41`, sortiert nach Länge absteigend). `aliasName` erzeugt ab dem 27. Person-Token `Alex A.1`, wovon `Alex A.` echtes Präfix ist; per Hash-Seed kann `Alex A.` zuerst ersetzt werden und zerstört `Alex A.1`. Genau die Dictionary-Ordnungs-Fehlerklasse, vor der CLAUDE.md warnt. Nur CLI/Report-Pfad, Alias-Modus, >26 Personen. **Fix:** wie `unmask` Tokens+Aliasse einsammeln und nach Länge absteigend ersetzen.
+- **`PseudonymVault.restore` nichtdeterministisch + Alias-Präfix-Kollision** (`PseudonymVault.swift:184`): iteriert `tokenToValue` in Dictionary-Reihenfolge und sortiert die Ersatzformen **nicht** — anders als `MaskingSession.unmask` (`PIIGate.swift:41`, sortiert nach Länge absteigend). `aliasName` erzeugt ab dem 27. Person-Token `Alex A.1`, wovon `Alex A.` echtes Präfix ist; per Hash-Seed kann `Alex A.` zuerst ersetzt werden und zerstört `Alex A.1`. Genau die Dictionary-Ordnungs-Fehlerklasse, vor der CONTRIBUTING.md warnt. Nur CLI/Report-Pfad, Alias-Modus, >26 Personen. **Fix:** wie `unmask` Tokens+Aliasse einsammeln und nach Länge absteigend ersetzen.
 - **`HTTPEmbedder.vector` NSNumber-Fallback nur für flaches `embedding`** (`Embedder.swift:74`, PLAUSIBLE): Der `[NSNumber]`-Fallback (nötig auf Linux, wo `as? [Double]` bridgen kann) existiert nur für `dict["embedding"]`, nicht für `embeddings` (`[[Double]]`) oder `data`. Auf Linux → `nil` → Breaker fällt, obwohl der Dienst korrekt antwortete. **Fix:** gemeinsame `doubles(from: Any?)`-Hilfe, die `[Double]` und `[NSNumber]` abdeckt, in allen drei Zweigen nutzen.
 
 **Code-Qualität (low):**
@@ -136,11 +136,11 @@ Plus die in Abschnitt 2 genannten M9/M10-Tests.
 
 ### Doku-Fixes
 
-- **CLAUDE.md:248-249** (medium): „(offen: Semantic Cache, DLP-Semantik, Malware/ClamAV-Naht)" widerspricht DECISIONS.md:675-677 (alle drei „fertig"/„Naht fertig") und dem Code. Die verbindliche Arbeitsanweisung lässt drei gebaute Stufen als offen erscheinen. **Fix:** Klammerzusatz auf den echten Reststand aktualisieren (laut DECISIONS offen: persistente Quarantäne-Senke, Cache-Persistenz-Naht, Rückweg der Stufen-Variante von `MaskingSessionStore`).
-- **README.md:307** (low): „# alle drei Targets" → „alle vier Targets" (Package.swift hat vier; CLAUDE.md:19 korrekt). Die Formulierung „Die drei Produkte" (README:74) bleibt korrekt (drei Bibliotheks-Produkte).
+- **Projektleitfaden (Reststand-Klammer)** (medium): „(offen: Semantic Cache, DLP-Semantik, Malware/ClamAV-Naht)" widerspricht DECISIONS.md:675-677 (alle drei „fertig"/„Naht fertig") und dem Code. Die verbindliche Arbeitsanweisung lässt drei gebaute Stufen als offen erscheinen. **Fix:** Klammerzusatz auf den echten Reststand aktualisieren (laut DECISIONS offen: persistente Quarantäne-Senke, Cache-Persistenz-Naht, Rückweg der Stufen-Variante von `MaskingSessionStore`).
+- **README.md:307** (low): „# alle drei Targets" → „alle vier Targets" (Package.swift hat vier). Die Formulierung „Die drei Produkte" (README:74) bleibt korrekt (drei Bibliotheks-Produkte).
 - **Umlaut-Konvention** (low): `RuleID.swift:6` „Identität" → „Identitaet"; `ChatModel.swift:52` „Inhaltsblöcken" → „Inhaltsbloecken". Beides Kommentare, keine Erkennungs-Literale. String-Literale mit deutschen Mustern unverändert lassen.
 - **DECISIONS.md:403/405** (low): doppelte Überschrift „### Abwärts-Naht: heute Provider, später die nächste Box" — eine der beiden identischen Zeilen löschen.
-- **CLAUDE.md:205ff.** (low): RuleID-Liste wirkt als geschlossene 12er-Bindungsmenge, Code definiert ~53 IDs. **Fix:** als exemplarisch kennzeichnen (Auslassungszeichen wie DECISIONS.md:47) oder — besser — eine vollständige RuleID-Registry-Tabelle in DECISIONS.md ergänzen, an die CLAUDE.md verweist.
+- **Projektleitfaden (RuleID-Liste)** (low): RuleID-Liste wirkt als geschlossene 12er-Bindungsmenge, Code definiert ~53 IDs. **Fix:** als exemplarisch kennzeichnen (Auslassungszeichen wie DECISIONS.md:47) oder — besser — eine vollständige RuleID-Registry-Tabelle in DECISIONS.md ergänzen, an die der Leitfaden verweist.
 - **`nextStage` undokumentiert** (low): `DaemonConfiguration.swift:215` liest den Root-Schlüssel und schaltet auf `StageDownstream`, aber weder `aigatewayd.example.json` noch der README-Daemon-Abschnitt erwähnen ihn. **Fix:** `nextStage` in der Beispiel-Config (als Variante) und im README dokumentieren.
 
 ---
@@ -183,7 +183,7 @@ Reihenfolge: erst Netz (Tests/Absicherung), dann Fixes, dann neue Bausteine. Jed
 
 **C — Doku-Fixes (billig, keine CI-Verhaltensänderung)**
 
-21. `docs: CLAUDE.md Reststand korrigieren (Cache/DLP/Malware sind fertig)`.
+21. `docs: Leitfaden-Reststand korrigieren (Cache/DLP/Malware sind fertig)`.
 22. `docs: README alle vier Targets; Umlaut-Transliteration in RuleID.swift/ChatModel.swift`.
 23. `docs: DECISIONS.md doppelte Ueberschrift entfernen; RuleID-Registry-Tabelle ergaenzen`.
 24. `docs: nextStage-Schluessel in example.json und README dokumentieren`.
