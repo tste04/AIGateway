@@ -2,26 +2,12 @@
 
 Thank you for considering a contribution — issues, ideas and pull requests are welcome.
 
-## The one rule: the CLA
+## Licensing of contributions
 
-AIGateway is **dual-licensed** (free for noncommercial use under PolyForm Noncommercial,
-commercial licenses sold separately). For that model — and for the project's ability to
-ever change its licensing or transfer the codebase as a whole — the maintainer must
-hold sufficient rights to *all* of the code.
-
-Therefore every contribution requires agreeing to the
-**[Contributor License Agreement](docs/CLA.md)**. Short version: you keep the copyright
-to your contribution, and you grant the maintainer a perpetual, irrevocable,
-transferable license to use, relicense and sublicense it under any terms.
-
-Agreement is expressed per pull request: add this line to your PR description —
-
-```
-I have read docs/CLA.md and I agree to it for this and all my future contributions.
-```
-
-PRs without it can't be merged, no exceptions — this protects the project's chain of
-title.
+AIGateway is licensed under the [Apache License 2.0](LICENSE). By submitting a
+contribution you agree that it is provided under the same license as the project
+(inbound = outbound, per section 5 of the license). You keep your copyright;
+there is no CLA to sign.
 
 ## Practical notes
 
@@ -37,8 +23,9 @@ title.
   `canImport(Darwin)` for the socket write path and for `FoundationNetworking`;
   one run leaves the other branch unchecked. A red run blocks a merge — the
   suite is fast and needs no network, so there is no reason to tolerate one.
-- There is no linter and no executable target — `GatewayService` is started by a
-  host program (example in the README).
+- There is no linter. The executable target is `aigatewayd` (`--config <path>`,
+  template in `docs/aigatewayd.example.json`); as a library, `GatewayService` is
+  started by a host program (example in the README).
 - Tests must stay deterministic. Beware of reading anything Swift does not
   promise to order: `Dictionary.first(where:)` reseeds per process and once made
   a passing test into a coin flip that only CI caught.
@@ -63,9 +50,10 @@ PRs violating these will be declined regardless of usefulness.
   score; it never decides to block. Logic of the form "block above score X" must not
   move into a scanner — thresholds have to stay changeable without touching a
   detection rule.
-- **Pipeline order is fixed** (see `docs/DECISIONS.md`): size guard → injection →
-  PII masking → DLP → semantic cache → upstream. Masking must stay *before* cache
-  key construction, and the cache lookup must stay *after* the firewall.
+- **Pipeline order is fixed** (see `docs/DECISIONS.md`): rate guard → size guard →
+  malware → injection → PII masking → DLP → semantic cache → upstream. Masking
+  must stay *before* cache key construction, and the cache lookup must stay
+  *after* the firewall.
 - **Normalization is for comparison only.** `TextNormalizer` builds a detection
   surface; what gets forwarded is always the merely sanitized text. Folding
   homoglyphs in the payload would destroy legitimate non-Latin content.
@@ -103,7 +91,7 @@ PRs violating these will be declined regardless of usefulness.
 ## Conventions
 
 - Every source file starts with `// Copyright (c) 2026 Tommy Stellmacher` and
-  `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`.
+  `// SPDX-License-Identifier: Apache-2.0`.
 - Comments are German and transliterated without umlauts in source files
   (`Groessen`, `aendern`); Markdown under `docs/` and the README use real umlauts.
 - Comments explain **why**, not what — match the existing tone rather than
