@@ -2,12 +2,26 @@
 
 Thank you for considering a contribution — issues, ideas and pull requests are welcome.
 
-## Licensing of contributions
+## The one rule: the CLA
 
-AIGateway is licensed under the [Apache License 2.0](LICENSE). By submitting a
-contribution you agree that it is provided under the same license as the project
-(inbound = outbound, per section 5 of the license). You keep your copyright;
-there is no CLA to sign.
+AIGateway is **dual-licensed** (free for noncommercial use under PolyForm Noncommercial,
+commercial licenses sold separately). For that model — and for the project's ability to
+ever change its licensing or transfer the codebase as a whole — the maintainer must
+hold sufficient rights to *all* of the code.
+
+Therefore every contribution requires agreeing to the
+**[Contributor License Agreement](docs/CLA.md)**. Short version: you keep the copyright
+to your contribution, and you grant the maintainer a perpetual, irrevocable,
+transferable license to use, relicense and sublicense it under any terms.
+
+Agreement is expressed per pull request: add this line to your PR description —
+
+```
+I have read docs/CLA.md and I agree to it for this and all my future contributions.
+```
+
+PRs without it can't be merged, no exceptions — this protects the project's chain of
+title.
 
 ## Practical notes
 
@@ -91,7 +105,7 @@ PRs violating these will be declined regardless of usefulness.
 ## Conventions
 
 - Every source file starts with `// Copyright (c) 2026 Tommy Stellmacher` and
-  `// SPDX-License-Identifier: Apache-2.0`.
+  `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`.
 - Comments are German and transliterated without umlauts in source files
   (`Groessen`, `aendern`); Markdown under `docs/` and the README use real umlauts.
 - Comments explain **why**, not what — match the existing tone rather than
