@@ -6,6 +6,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Der Workflow liest nur den Checkout — mehr Rechte braucht das Token nicht.
+permissions:
+  contents: read
+
+# Ein neuer Push auf denselben Ref macht den laufenden Lauf gegenstandslos;
+# main-Laeufe laufen aus, damit jede Commit-SHA ihr Ergebnis behaelt.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Zwei Plattformen, weil der Code beide bedient: der HTTP-Server waehlt ueber
 # `#if canImport(Darwin)` zwischen write(2) und send(2) samt SO_NOSIGPIPE, und
 # `UpstreamClient` zwischen Foundation und FoundationNetworking. Ein Lauf allein
