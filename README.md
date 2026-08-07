@@ -1,6 +1,8 @@
 # AIGateway
 
 [![CI](https://github.com/tste04/AIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/tste04/AIGateway/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Swift 5.7+](https://img.shields.io/badge/Swift-5.7+-orange.svg)](Package.swift)
 
 Eine Input Firewall in Swift: die Schicht zwischen Client und Sprachmodell, die
 prüft, was hineingeht. Deterministisch, netzfrei im Kern, ohne externe
