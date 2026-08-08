@@ -1,0 +1,21 @@
+# Formatgrundlagen fuer Beitraege; die inhaltlichen Konventionen
+# (Kommentarsprache, Header) stehen in CONTRIBUTING.md.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.swift]
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Zwei Leerzeichen am Zeilenende sind in Markdown ein harter Umbruch.
+trim_trailing_whitespace = false
