@@ -194,7 +194,9 @@ vom Proxy- in den **Stufenbetrieb**: statt an den konfigurierten Provider
 reicht er dann an diese Adresse weiter — die kanonische, maskierte Anfrage samt
 Firewall-Urteil (siehe nächster Abschnitt). Fehlt der Schlüssel, läuft der
 Proxy-Betrieb auf `server.upstream`. Die Beispiel-Konfiguration lässt ihn weg,
-weil der Alleinbetrieb der Normalfall ist.
+weil der Alleinbetrieb der Normalfall ist; für den Stufenbetrieb liegt eine
+eigene Vorlage bei:
+[`docs/aigatewayd.stage.example.json`](docs/aigatewayd.stage.example.json).
 
 **Mandanten trennen.** Der Abschnitt `identity` (`enabled: true`) schaltet den
 `SharedSecretPrincipalResolver` scharf; das Geheimnis kommt aus

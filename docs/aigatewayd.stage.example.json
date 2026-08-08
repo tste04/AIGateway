@@ -1,0 +1,18 @@
+{
+  "server": {
+    "port": 8080,
+    "loopbackOnly": true,
+    "maxBodyBytes": 1000000
+  },
+  "policy": {
+    "blockThreshold": 0.7,
+    "failClosed": true
+  },
+  "stages": {
+    "malware": true,
+    "pii": true,
+    "dlp": true
+  },
+  "nextStage": "https://policy.internal/v1/decide",
+  "drainSeconds": 15
+}
