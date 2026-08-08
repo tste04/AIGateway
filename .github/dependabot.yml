@@ -1,0 +1,11 @@
+# Haelt die gepinnten GitHub-Actions aktuell (checkout@v4 usw.).
+# Package-Abhaengigkeiten gibt es bewusst keine — Foundation ist die einzige,
+# daher kein swift-Oekosystem hier.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - ci
