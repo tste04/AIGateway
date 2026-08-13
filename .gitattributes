@@ -1,0 +1,9 @@
+# Zeilenenden: im Repo immer LF, unabhaengig vom Betriebssystem des
+# Beitragenden — die .editorconfig sagt es dem Editor, das hier sagt es git.
+* text=auto eol=lf
+
+# `git archive` (Quell-Tarball fuer Nutzer) braucht die Repo-Verwaltung nicht.
+.github/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+.editorconfig export-ignore
