@@ -12,6 +12,16 @@ Abhängigkeiten außer `Foundation`.
 frei; kommerzielle Nutzung nur mit Lizenz (siehe [Lizenz](#lizenz) /
 [COMMERCIAL.md](COMMERCIAL.md)).
 
+> **English:** AIGateway is an input firewall for AI systems, written in Swift
+> with `Foundation` as the only dependency: prompt-injection detection
+> (including homoglyph, spacing and Base64 obfuscation), secret and PII
+> detection with round-trip masking, DLP redaction, a partitioned semantic
+> cache, rate limiting and a small daemon — deterministic and network-free at
+> its core. Docs and code comments are in German;
+> [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and the API
+> surface are English. Free for noncommercial use, commercial use requires a
+> license ([COMMERCIAL.md](COMMERCIAL.md)).
+
 ## Einordnung
 
 ```
