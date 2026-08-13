@@ -113,6 +113,17 @@ if arguments.contains("--help") || arguments.contains("-h") {
     exit(0)
 }
 
+// Ein unbekanntes Argument ist ein Fehler, kein Achselzucken — dieselbe
+// Regel wie fuer unbekannte Schluessel in der Konfigurationsdatei: still
+// ignoriert liefe der Daemon mit Standardwerten, waehrend der Betreiber
+// glaubt, seine Option gesetzt zu haben (`--confg` tippt sich schnell).
+var consumedValueIndex = -1
+if let index = arguments.firstIndex(of: "--config") { consumedValueIndex = index + 1 }
+for (index, argument) in arguments.enumerated().dropFirst() {
+    if argument == "--config" || index == consumedValueIndex { continue }
+    fail("unknown argument '\(argument)' — see --help")
+}
+
 var configuration = DaemonConfiguration()
 if let index = arguments.firstIndex(of: "--config") {
     guard index + 1 < arguments.count else { fail("--config needs a path") }
