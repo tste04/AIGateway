@@ -765,3 +765,21 @@ Reihenfolge:
 | Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
 | Betrieb als Box | `aigatewayd` + `DaemonConfiguration` | **fertig** |
 | Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Senke ist Betreibersache |
+
+## Lizenzmodell (August 2026)
+
+Das Projekt ist **dual-lizenziert**: Quellcode offen einsehbar, nichtkommerzielle
+Nutzung frei unter PolyForm Noncommercial 1.0.0, jede kommerzielle Nutzung nur
+mit kommerzieller Lizenz ([COMMERCIAL.md](../COMMERCIAL.md)). Die Begründung und
+das komponentenübergreifende Schichtenmodell stehen in
+[LICENSING.md](../LICENSING.md); die Fähigkeit zur Relizenzierung sichert das
+CLA ([CLA.md](CLA.md)).
+
+**Historie, festgehalten wegen der Rechtsfolgen:** Vom 02.08. bis 07.08.2026
+stand das Repo unter Apache 2.0. Diese Lizenz ist unwiderruflich — wer den
+Stand aus diesem Fenster bezogen hat, behält die Apache-Rechte für genau diesen
+Schnappschuss. Ab Commit `7fce487` (07.08.2026) gilt für alle weiteren Stände
+wieder das Dual-Modell. Eine erneute Lockerung (NC → permissiv) wäre jederzeit
+möglich und würde nur nach vorn wirken; eine erneute Verschärfung erzeugt
+wieder ein solches dauerhaft freies Fenster — der Wechsel ist also nicht
+beliebig wiederholbar, ohne Substanz zu verschenken. (13.08.2026)
