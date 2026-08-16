@@ -50,7 +50,11 @@ final class SessionReturnTests: XCTestCase {
         store = MaskingSessionStore()
         var policy = GatewayPolicy.standard
         policy.stageBudgetMilliseconds = 10_000
-        let pipeline = GatewayPipeline(policy: policy, sessions: store)
+        // Mit PII-Stufe: nur eine nicht-leere Zuordnung wird geparkt — die
+        // Betriebsarten-Tests brauchen also echten PII-Inhalt.
+        let pipeline = GatewayPipeline(
+            pii: PIIGate(policy: .gatewayDefault, baseDirectory: nil),
+            policy: policy, sessions: store)
         service = GatewayService(configuration: GatewayConfiguration(),
                                  pipeline: pipeline,
                                  downstream: StubDownstream())
@@ -148,8 +152,12 @@ final class SessionReturnTests: XCTestCase {
     // MARK: Die Klammer je Betriebsart
 
     private func chat() -> [String: Any] {
+        // Enthaelt PII (denselben Namen wie der gruene Maskierungs-Test),
+        // damit eine nicht-leere Zuordnung entsteht — leere werden nicht
+        // geparkt.
         ["model": "m", "stream": false,
-         "messages": [["role": "user", "content": "Hallo"]]]
+         "messages": [["role": "user",
+                       "content": "Bitte an Frau Anna Schmidt senden."]]]
     }
 
     func testProxyModeClosesTheParkedSessionAfterTheAnswer() async {
@@ -168,7 +176,9 @@ final class SessionReturnTests: XCTestCase {
         policy.stageBudgetMilliseconds = 10_000
         let staged = GatewayService(
             configuration: GatewayConfiguration(),
-            pipeline: GatewayPipeline(policy: policy, sessions: store),
+            pipeline: GatewayPipeline(
+                pii: PIIGate(policy: .gatewayDefault, baseDirectory: nil),
+                policy: policy, sessions: store),
             downstream: StageDownstream(url: URL(string: "http://127.0.0.1:9/v1/decide")!))
 
         let responder = RecordingResponder()
