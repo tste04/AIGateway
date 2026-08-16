@@ -75,6 +75,40 @@ final class FileQuarantineSinkTests: XCTestCase {
         XCTAssertThrowsError(try FileQuarantineSink(directory: blocked))
     }
 
+    func testExpiredFilesVanishOnNextStore() async throws {
+        let sink = try FileQuarantineSink(directory: directory)
+        await sink.store(sample("old", retention: 60))
+        // 90 Sekunden spaeter ist "old" abgelaufen; das Schreiben von "new"
+        // muss es entfernen — die Frist haengt nicht an einem externen Cron.
+        await sink.store(sample("new", at: t0.addingTimeInterval(90)))
+
+        let files = try storedFiles()
+        XCTAssertEqual(files.count, 1, "der abgelaufene Vorfall ist geloescht")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let survivor = try decoder.decode(QuarantineSample.self,
+                                          from: Data(contentsOf: files[0]))
+        XCTAssertEqual(survivor.correlationID, "new")
+    }
+
+    func testSweepAloneEnforcesTheDeadline() async throws {
+        let sink = try FileQuarantineSink(directory: directory)
+        await sink.store(sample("only", retention: 60))
+        await sink.sweep(now: t0.addingTimeInterval(120))
+        XCTAssertTrue(try storedFiles().isEmpty,
+                      "auch ohne neuen Vorfall haelt die Senke ihre Frist")
+    }
+
+    func testForeignFilesAreNeverDeleted() async throws {
+        let sink = try FileQuarantineSink(directory: directory)
+        let foreign = directory.appendingPathComponent("notes.txt")
+        try Data("vom Betreiber".utf8).write(to: foreign)
+        await sink.store(sample("x", retention: 60))
+        await sink.sweep(now: t0.addingTimeInterval(120))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: foreign.path),
+                      "nur Dateien nach eigenem Schema werden angefasst")
+    }
+
     func testWriteFailureIsCountedNotSwallowed() async throws {
         let sink = try FileQuarantineSink(directory: directory)
         // Nach dem Start verschwindet das Verzeichnis — der naechste Vorfall
