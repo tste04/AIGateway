@@ -109,6 +109,35 @@ final class FileQuarantineSinkTests: XCTestCase {
                       "nur Dateien nach eigenem Schema werden angefasst")
     }
 
+    func testCapDropsOldestExpiryFirst() async throws {
+        let sink = try FileQuarantineSink(directory: directory, maxSamples: 2)
+        await sink.store(sample("a", retention: 100))
+        await sink.store(sample("b", retention: 200))
+        await sink.store(sample("c", retention: 300))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let kept = try storedFiles()
+            .map { try decoder.decode(QuarantineSample.self, from: Data(contentsOf: $0)) }
+            .map(\.correlationID).sorted()
+        XCTAssertEqual(kept, ["b", "c"], "die aelteste Frist faellt zuerst")
+    }
+
+    func testCountsDetailNeverPutsTextOnDisk() async throws {
+        // Die Sicherheitsinvariante der Stufe `counts`: kein Text. Geprueft
+        // gegen die ROHEN Bytes auf der Platte, nicht gegen das Modell —
+        // genau dort wuerde ein Kodierfehler die Invariante brechen.
+        let sink = try FileQuarantineSink(directory: directory)
+        await sink.store(sample("only", detail: .counts, content: nil))
+
+        let raw = try String(decoding: Data(contentsOf: storedFiles()[0]),
+                             as: UTF8.self)
+        XCTAssertFalse(raw.contains("Ignore"), "kein Prompt-Text auf Platte")
+        XCTAssertFalse(raw.contains("\"content\""),
+                       "auf Stufe counts existiert nicht einmal das Feld")
+        XCTAssertTrue(raw.contains("INJ-001"), "die Regel-IDs dagegen schon")
+    }
+
     func testWriteFailureIsCountedNotSwallowed() async throws {
         let sink = try FileQuarantineSink(directory: directory)
         // Nach dem Start verschwindet das Verzeichnis — der naechste Vorfall
