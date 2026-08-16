@@ -60,6 +60,7 @@ public actor FileQuarantineSink: QuarantineSink {
     }
 
     public func store(_ sample: QuarantineSample) async {
+        sweep(now: sample.timestamp)
         let expiryMilliseconds = Int(sample.expiresAt.timeIntervalSince1970 * 1000)
         let name = "q-\(expiryMilliseconds)-\(UUID().uuidString).json"
         do {
@@ -74,4 +75,33 @@ public actor FileQuarantineSink: QuarantineSink {
 
     /// Wie viele Vorfaelle nicht geschrieben werden konnten.
     public func failedWriteCount() -> Int { failedWrites }
+
+    /// Entfernt abgelaufene Vorfaelle. Laeuft vor jedem `store` mit; ein
+    /// Betreiber kann sie zusaetzlich periodisch aufrufen, damit auch eine
+    /// stille Instanz ihre Frist haelt. Dateien, deren Name nicht dem Schema
+    /// entspricht, werden nie angefasst — loeschen ist hier die gefaehrliche
+    /// Richtung, nicht behalten.
+    public func sweep(now: Date = Date()) {
+        for url in storedFileURLs() {
+            guard let expiry = Self.expiry(of: url) else { continue }
+            if expiry <= now {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    private func storedFileURLs() -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        return contents.filter {
+            $0.lastPathComponent.hasPrefix("q-") && $0.pathExtension == "json"
+        }
+    }
+
+    /// Liest die Ablauffrist aus dem Dateinamen `q-<ablauf-ms>-<kennung>.json`.
+    private static func expiry(of url: URL) -> Date? {
+        let parts = url.lastPathComponent.split(separator: "-", maxSplits: 2)
+        guard parts.count == 3, let milliseconds = Double(parts[1]) else { return nil }
+        return Date(timeIntervalSince1970: milliseconds / 1000)
+    }
 }
