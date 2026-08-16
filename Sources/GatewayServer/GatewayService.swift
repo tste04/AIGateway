@@ -408,6 +408,22 @@ public final class GatewayService: @unchecked Sendable {
                 "content": text,
                 "restored": session != nil,
             ])
+        case "/v1/session/extend":
+            // Der Vorgang geht in die menschliche Freigabe: die kurze Frist
+            // wuerde die Zuordnung verlieren, bevor jemand entschieden hat.
+            // Verlaengert wird auf die lange, ausdrueckliche Frist — die
+            // Zwei-Fristen-Festlegung aus DECISIONS.md.
+            let extended = await pipeline.extendSession(correlationID: correlationID,
+                                                        partition: partition)
+            connection.respond(status: extended ? 200 : 404, json: [
+                "extended": extended,
+            ])
+        case "/v1/session/close":
+            // Abgebrochene Freigabe, verworfener Vorgang: die Zuordnung ist
+            // Klartext-PII und faellt sofort, nicht erst mit der Frist.
+            await pipeline.closeSession(correlationID: correlationID,
+                                        partition: partition)
+            connection.respond(status: 200, json: ["closed": true])
         default:
             connection.respond(status: 404, json: ["error": "unknown route \(request.path)"])
         }
