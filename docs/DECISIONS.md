@@ -551,6 +551,20 @@ der Schwelle** — dort sitzen die Fehlalarme und die knapp durchgerutschten
 Angriffe, also die wertvollsten Beispiele. Dazu eine harte Aufbewahrungsfrist,
 die eine Senke durchsetzen **muss**.
 
+**Änderung (13.08.2026): eine persistente Senke gehört doch ins Repo.** Die
+ursprüngliche Festlegung („wer Beispiele über einen Neustart hinaus braucht,
+schreibt eine eigene Senke") verlagerte genau die Komponente zum Betreiber,
+die am leichtesten falsch gebaut wird — eine selbstgeschriebene Senke, die
+die Frist *nicht* durchsetzt, wäre unsichtbar kaputt. Deshalb liefert
+`GatewayServer` jetzt eine `FileQuarantineSink` mit: eine Datei je Vorfall,
+die Ablauffrist im Dateinamen kodiert und beim Schreiben wie per `sweep()`
+exakt durchgesetzt, Schreibprobe beim Start (fail-closed), Kapazitätsdeckel.
+Die Betreiber-Entscheidung bleibt ausdrücklich: Default ist weiterhin die
+Speicher-Senke, erst die Zeile `quarantine.directory` in der
+Daemon-Konfiguration legt Inhalt der konfigurierten Stufe auf Platte.
+Zugriffsschutz des Verzeichnisses (Rechte, Verschlüsselung) bleibt
+Betreibersache.
+
 #### Umsetzung (Juli 2026)
 
 Drei Punkte kamen beim Bauen dazu:
@@ -764,7 +778,7 @@ Reihenfolge:
 | Abschluss-Ereignis | `CompletionEvent` | **fertig** |
 | Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
 | Betrieb als Box | `aigatewayd` + `DaemonConfiguration` | **fertig** |
-| Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Senke ist Betreibersache |
+| Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Datei-Senke eingebaut (opt-in per `quarantine.directory`), Zugriffsschutz ist Betreibersache |
 
 ## Lizenzmodell (August 2026)
 
