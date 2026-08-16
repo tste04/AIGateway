@@ -137,9 +137,19 @@ if let index = arguments.firstIndex(of: "--config") {
 
 // MARK: - Zusammenbau
 
+// Die Quarantaene-Senke kann beim Start scheitern (Verzeichnis nicht
+// beschreibbar) — dann faellt der Daemon laut, statt Vorfaelle still zu
+// verlieren.
+let quarantineSink: QuarantineSink?
+do {
+    quarantineSink = try configuration.makeQuarantineSink()
+} catch {
+    fail("\(error)")
+}
+
 let pipeline = configuration.makePipeline(
     embedder: configuration.makeEmbedder(),
-    quarantineSink: configuration.makeQuarantineSink())
+    quarantineSink: quarantineSink)
 let rateGuard = configuration.makeRateGuard()
 
 // Proxy- oder Stufenbetrieb. Der Unterschied ist eine Zeile hier und keine in

@@ -40,6 +40,9 @@ public struct DaemonConfiguration: Sendable {
     public var cache: SemanticCachePolicy
     public var rateLimit: RateLimitPolicy
     public var quarantine: QuarantinePolicy
+    /// Ablageverzeichnis der Quarantaene. `nil` = Speicher-Senke (Default);
+    /// gesetzt = persistente Datei-Senke, siehe `makeQuarantineSink()`.
+    public var quarantineDirectory: URL?
     public var maskingSessions: MaskingSessionPolicy?
     /// Endpunkt der naechsten Stufe. Gesetzt = Stufenbetrieb (`StageDownstream`),
     /// leer = Proxy-Betrieb auf den konfigurierten Provider.
@@ -71,6 +74,7 @@ public struct DaemonConfiguration: Sendable {
                 cache: SemanticCachePolicy = .standard,
                 rateLimit: RateLimitPolicy = .standard,
                 quarantine: QuarantinePolicy = QuarantinePolicy(),
+                quarantineDirectory: URL? = nil,
                 maskingSessions: MaskingSessionPolicy? = nil,
                 nextStageURL: URL? = nil,
                 drainSeconds: TimeInterval = 15,
@@ -90,6 +94,7 @@ public struct DaemonConfiguration: Sendable {
         self.cache = cache
         self.rateLimit = rateLimit
         self.quarantine = quarantine
+        self.quarantineDirectory = quarantineDirectory
         self.maskingSessions = maskingSessions
         self.nextStageURL = nextStageURL
         self.drainSeconds = drainSeconds
@@ -238,6 +243,12 @@ public struct DaemonConfiguration: Sendable {
             }
             if let value = quarantine.double("retention") { config.quarantine.retention = value }
             if let value = quarantine.double("nearMissBand") { config.quarantine.nearMissBand = value }
+            if let path = quarantine.string("directory") {
+                guard !path.isEmpty else {
+                    throw ConfigurationError.badValue("quarantine.directory", "empty path")
+                }
+                config.quarantineDirectory = URL(fileURLWithPath: path)
+            }
             try quarantine.finish()
         }
 
@@ -397,12 +408,18 @@ public struct DaemonConfiguration: Sendable {
     }
 
     /// Der Beweismittelschrank fuer den Feedback Loop. `nil`, wenn die
-    /// Quarantaene aus ist. Bewusst der In-Memory-Sink: eine persistente Senke
-    /// haelt Nutzinhalt auf Platte und entscheidet ueber Ablageort und
-    /// Loeschfrist des Betreibers mit — das ist Host-Programm-Sache, keine
-    /// Konfigurationszeile (siehe QuarantineSink-Invariante).
-    public func makeQuarantineSink() -> QuarantineSink? {
-        quarantine.enabled ? MemoryQuarantineSink() : nil
+    /// Quarantaene aus ist. Default bleibt der In-Memory-Sink: ein Neustart
+    /// leert ihn, nichts liegt auf Platte. Erst die AUSDRUECKLICHE Angabe
+    /// eines Verzeichnisses (`quarantine.directory`) schaltet auf die
+    /// Datei-Senke um — diese Zeile IST die Betreiber-Entscheidung, Inhalt
+    /// der konfigurierten Stufe persistent abzulegen (Begruendung der
+    /// Kehrtwende gegenueber der reinen Host-Programm-Loesung: DECISIONS.md,
+    /// Quarantaene-Abschnitt). Wirft, wenn das Verzeichnis nicht beschreibbar
+    /// ist — fail-closed beim Start, kein stiller Verlust beim ersten Vorfall.
+    public func makeQuarantineSink() throws -> QuarantineSink? {
+        guard quarantine.enabled else { return nil }
+        guard let directory = quarantineDirectory else { return MemoryQuarantineSink() }
+        return try FileQuarantineSink(directory: directory)
     }
 
     /// Der Embedder fuer die semantische Cache-Stufe, oder `nil`. Ohne ihn

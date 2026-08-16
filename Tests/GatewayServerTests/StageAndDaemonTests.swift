@@ -265,15 +265,15 @@ final class DaemonConfigurationTests: XCTestCase {
         XCTAssertNil(DaemonConfiguration().makeRateGuard())
     }
 
-    func testQuarantineSinkFollowsTheEnabledFlag() async {
+    func testQuarantineSinkFollowsTheEnabledFlag() async throws {
         // Der Befund M5: enabled war wirkungslos, weil main.swift keinen Sink
         // baute. makeQuarantineSink schliesst die Luecke.
-        XCTAssertNil(DaemonConfiguration().makeQuarantineSink(), "aus -> kein Sink")
+        XCTAssertNil(try DaemonConfiguration().makeQuarantineSink(), "aus -> kein Sink")
 
         var config = DaemonConfiguration()
         config.quarantine.enabled = true
         config.policy.stageBudgetMilliseconds = 10_000
-        XCTAssertNotNil(config.makeQuarantineSink(), "an -> Sink gebaut")
+        XCTAssertNotNil(try config.makeQuarantineSink(), "an -> Sink gebaut")
 
         // End-to-end: ein sicherer Block landet tatsaechlich im Sink.
         let memory = MemoryQuarantineSink()
