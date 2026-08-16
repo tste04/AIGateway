@@ -66,7 +66,10 @@ Output Guardrails sind nicht Teil davon.
   Speicher, partitionsgebunden, mit kurzer Default- und langer Freigabe-Frist.
 - **Quarantäne für Eval-Daten** (`QuarantineSink`): bewahrt Blocks und
   Beinahe-Treffer befristet auf, damit sich Regeln nachschärfen lassen, ohne
-  Prompts ins Audit zu schreiben. Default aus, drei Stufen.
+  Prompts ins Audit zu schreiben. Default aus, drei Stufen. Standardmäßig nur
+  im Speicher; ein `quarantine.directory` in der Daemon-Konfiguration schaltet
+  auf eine persistente Datei-Senke um — eine Datei je Vorfall, Ablauffrist im
+  Dateinamen und hart durchgesetzt, Schreibprobe beim Start.
 - **HTTP-/SSE-Server** mit Provider-Adaptern für OpenAI, Anthropic und Ollama,
   eingehend wie ausgehend.
 - **Zwei Betriebsarten nach unten** (`Downstream`): direkt auf einen Provider

@@ -48,7 +48,8 @@
     "enabled": false,
     "detail": "counts",
     "retention": 604800,
-    "nearMissBand": 0.15
+    "nearMissBand": 0.15,
+    "directory": "/var/lib/aigateway/quarantine"
   },
   "maskingSessions": {
     "enabled": false,
