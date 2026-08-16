@@ -186,10 +186,16 @@ public final class GatewayService: @unchecked Sendable {
             await relay(handoff, forward: forward, inbound: inbound,
                         outcome: outcome, connection: connection)
         }
-        // Die Klammer schliesst hier: die Antwort ist raus (oder gescheitert),
-        // die Zuordnung wird nicht mehr gebraucht. Ohne konfigurierten
-        // Speicher ist das ein Leerlauf.
-        await closeSession(handoff)
+        // Die Klammer schliesst hier NUR im Alleinbetrieb: die Antwort ist
+        // raus (oder gescheitert), die Zuordnung wird nicht mehr gebraucht.
+        // Im Stufenbetrieb dagegen arbeitet die naechste Box Minuten bis
+        // Stunden weiter (Agent Loop, menschliche Freigabe) und holt die
+        // Rueckuebersetzung spaeter ueber den Rueckweg (/v1/session/...);
+        // dort schliessen der ausdrueckliche Abschluss oder die Frist.
+        // Ohne konfigurierten Speicher ist beides ein Leerlauf.
+        if !(downstream is StageDownstream) {
+            await closeSession(handoff)
+        }
     }
 
     /// Weg und Dialekt der Anfrage. `nil` = bereits beantwortet (Healthcheck,
