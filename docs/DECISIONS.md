@@ -507,6 +507,17 @@ Kette, nach den Output Guardrails.** Deren PII- und Compliance-Prüfung muss
 Klartext sehen; hinter der De-Maskierung prüfte sie Platzhalter und fände
 nichts.
 
+**Umsetzung des Rückwegs (13.08.2026).** Der Stufenbetrieb schließt die
+Klammer nicht mehr mit der Antwort — sie bleibt geparkt, bis der Rückweg sie
+holt oder die Frist fällt. Drei Endpunkte tragen ihn: `/v1/session/unmask`
+(Klardaten, schließt per Default; `keep` für die Freigabe-Vorschau),
+`/v1/session/extend` (die lange Frist der Zwei-Fristen-Festlegung) und
+`/v1/session/close` (sofortiges Verwerfen). Der Zugriff läuft über denselben
+`PrincipalResolver` wie der Hinweg und ist damit partitionsgebunden
+(Festlegung 3); eine fehlende Zuordnung liefert Platzhalter samt
+`restored: false` statt einer Auflösung aus dem Vault (Festlegung 2). Im
+Alleinbetrieb schließt die Klammer unverändert mit der Antwort.
+
 ### Audit und Abschluss sind zwei Ereignisse
 
 `AuditEvent` bleibt und feuert **sofort nach der Entscheidung**, vor dem Weg
@@ -776,7 +787,7 @@ Reihenfolge:
 | Identität festgestellt | `PrincipalResolver` | **fertig** — Default ignoriert Behauptungen |
 | Abwärts-Naht | `Downstream` (Abstraktion) | **fertig** — Provider- und Stufen-Variante |
 | Abschluss-Ereignis | `CompletionEvent` | **fertig** |
-| Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — Rückweg der Stufen-Variante offen |
+| Klammer über den Agent Loop | `MaskingSessionStore` | **fertig** — inkl. Rückweg der Stufen-Variante (`/v1/session/*`) |
 | Betrieb als Box | `aigatewayd` + `DaemonConfiguration` | **fertig** |
 | Quarantäne für Eval | `QuarantineSink` | **fertig** — persistente Datei-Senke eingebaut (opt-in per `quarantine.directory`), Zugriffsschutz ist Betreibersache |
 
