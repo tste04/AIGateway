@@ -159,6 +159,10 @@ public final class GatewayService: @unchecked Sendable {
         // Header sogar der einzige Traeger, denn deren Fehler sind kein JSON.
         let correlationID = UUID().uuidString
         let connection = CorrelatedResponder(client, correlationID: correlationID)
+        if request.path.hasPrefix("/v1/session/") {
+            await handleSessionReturn(request, connection)
+            return
+        }
         guard let (inbound, chat) = route(request, connection) else { return }
         guard let principal = resolvePrincipal(request, connection) else { return }
         guard await admitted(principal, model: chat.model,
@@ -357,6 +361,56 @@ public final class GatewayService: @unchecked Sendable {
     private func closeSession(_ handoff: GatewayHandoff) async {
         await pipeline.closeSession(correlationID: handoff.correlationID,
                                     partition: handoff.principal.cachePartition)
+    }
+
+    // MARK: - Rueckweg der Stufen-Variante
+    //
+    // Die naechste Box (Output Guardrails, Freigabe) bringt den fertigen Text
+    // zurueck und bekommt die Klardaten — der letzte Schritt der Kette. Der
+    // Zugriff laeuft ueber denselben PrincipalResolver wie der Hinweg und ist
+    // damit an die Partition gebunden: eine fremde correlationID zu kennen
+    // reicht nicht. Fehlt die Zuordnung (abgelaufen, geschlossen, fremde
+    // Partition), geht der Text MIT Platzhaltern zurueck und `restored` sagt
+    // es — nicht raten, nicht aus dem globalen Vault aufloesen.
+    private func handleSessionReturn(_ request: HTTPRequest,
+                                     _ connection: any HTTPResponder) async {
+        guard request.method == "POST" else {
+            connection.respond(status: 404, json: ["error": "unknown route \(request.path)"])
+            return
+        }
+        guard let principal = resolvePrincipal(request, connection) else { return }
+        guard let body = (try? JSONSerialization.jsonObject(with: request.body))
+                as? [String: Any],
+              let correlationID = body["correlation_id"] as? String,
+              !correlationID.isEmpty else {
+            connection.respond(status: 400, json: ["error": "correlation_id is required"])
+            return
+        }
+        let partition = principal.cachePartition
+
+        switch request.path {
+        case "/v1/session/unmask":
+            guard let content = body["content"] as? String else {
+                connection.respond(status: 400, json: ["error": "content is required"])
+                return
+            }
+            let session = await pipeline.session(correlationID: correlationID,
+                                                 partition: partition)
+            let text = (session ?? .empty).unmask(content)
+            // De-Maskierung ist der letzte Schritt: die Zuordnung schliesst,
+            // ausser der Aufrufer sagt ausdruecklich, dass er sie noch braucht
+            // (etwa fuer eine Vorschau vor der Freigabe).
+            if session != nil, (body["keep"] as? Bool) != true {
+                await pipeline.closeSession(correlationID: correlationID,
+                                            partition: partition)
+            }
+            connection.respond(status: 200, json: [
+                "content": text,
+                "restored": session != nil,
+            ])
+        default:
+            connection.respond(status: 404, json: ["error": "unknown route \(request.path)"])
+        }
     }
 
     /// Was der Rueckweg ueber sich selbst weiss.
