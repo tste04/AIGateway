@@ -287,6 +287,44 @@ final class DaemonConfigurationTests: XCTestCase {
         XCTAssertEqual(kept.count, 1, "der Block wird aufbewahrt")
     }
 
+    func testQuarantineDirectorySwitchesToTheFileSink() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("daemon-quarantine-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let config = try parse(["quarantine": [
+            "enabled": true, "directory": directory.path,
+        ]])
+        XCTAssertEqual(config.quarantineDirectory?.path, directory.path)
+        XCTAssertTrue(try config.makeQuarantineSink() is FileQuarantineSink,
+                      "Verzeichnis gesetzt -> Datei-Senke")
+
+        // Ohne Verzeichnis bleibt es die Speicher-Senke — die Zeile ist die
+        // Entscheidung, nichts anderes.
+        var memoryOnly = DaemonConfiguration()
+        memoryOnly.quarantine.enabled = true
+        XCTAssertTrue(try memoryOnly.makeQuarantineSink() is MemoryQuarantineSink)
+    }
+
+    func testUnwritableQuarantineDirectoryFailsTheBuild() throws {
+        // Fail-closed: an der Stelle des Verzeichnisses liegt eine Datei.
+        let blocked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("daemon-quarantine-blocked-\(UUID().uuidString)")
+        try Data("occupied".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+
+        var config = DaemonConfiguration()
+        config.quarantine.enabled = true
+        config.quarantineDirectory = blocked
+        XCTAssertThrowsError(try config.makeQuarantineSink())
+    }
+
+    func testEmptyQuarantineDirectoryIsRejectedAtParse() {
+        XCTAssertThrowsError(try parse(["quarantine": [
+            "enabled": true, "directory": "",
+        ]]))
+    }
+
     func testEmbedderFollowsConfigAndEnvKey() throws {
         // Der Befund M4: die semantische Cache-Stufe war im Daemon tot, weil
         // kein Embedder verdrahtet wurde. Jetzt liest die Config eine
