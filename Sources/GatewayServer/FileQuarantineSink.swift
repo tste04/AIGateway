@@ -28,6 +28,7 @@ public actor FileQuarantineSink: QuarantineSink {
     }
 
     private let directory: URL
+    private let maxSamples: Int
     private let encoder: JSONEncoder
     private var failedWrites = 0
 
@@ -35,8 +36,9 @@ public actor FileQuarantineSink: QuarantineSink {
     /// beschreibbar ist. Fail-closed beim Start: ein Betreiber, der eine
     /// persistente Quarantaene konfiguriert, soll den Fehler sofort sehen —
     /// nicht als stillen Verlust beim ersten Vorfall.
-    public init(directory: URL) throws {
+    public init(directory: URL, maxSamples: Int = 10_000) throws {
         self.directory = directory
+        self.maxSamples = maxSamples
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -70,6 +72,21 @@ public actor FileQuarantineSink: QuarantineSink {
             // Der Vertrag laesst `store` nicht werfen; ein Zaehler macht den
             // Verlust wenigstens sichtbar, statt ihn zu verschlucken.
             failedWrites += 1
+        }
+        enforceCap()
+    }
+
+    /// Deckel gegen Volllaufen: liegen mehr Vorfaelle als `maxSamples` im
+    /// Verzeichnis, fallen die mit der aeltesten Frist zuerst — dieselbe
+    /// Regel wie in der Speicher-Senke, nur auf Platte.
+    private func enforceCap() {
+        let files = storedFileURLs()
+        guard files.count > maxSamples else { return }
+        let byExpiry = files.sorted {
+            (Self.expiry(of: $0) ?? .distantPast) < (Self.expiry(of: $1) ?? .distantPast)
+        }
+        for url in byExpiry.prefix(files.count - maxSamples) {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
