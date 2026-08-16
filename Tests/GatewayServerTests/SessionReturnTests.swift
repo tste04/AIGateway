@@ -144,4 +144,40 @@ final class SessionReturnTests: XCTestCase {
         let response = await post("/v1/session/steal", ["correlation_id": "c"])
         XCTAssertEqual(response.status, 404)
     }
+
+    // MARK: Die Klammer je Betriebsart
+
+    private func chat() -> [String: Any] {
+        ["model": "m", "stream": false,
+         "messages": [["role": "user", "content": "Hallo"]]]
+    }
+
+    func testProxyModeClosesTheParkedSessionAfterTheAnswer() async {
+        // Alleinbetrieb: mit der Antwort ist die Klammer zu — niemand kommt
+        // spaeter noch einmal vorbei.
+        let responder = await post("/v1/chat/completions", chat())
+        XCTAssertEqual(responder.status, 200)
+        let remaining = await store.count()
+        XCTAssertEqual(remaining, 0)
+    }
+
+    func testStageModeKeepsTheParkedSessionForTheReturnPath() async {
+        // Stufenbetrieb: die naechste Box (hier ein toter Port, der Fehlschlag
+        // ist egal) arbeitet weiter — die Zuordnung muss den Rueckweg erleben.
+        var policy = GatewayPolicy.standard
+        policy.stageBudgetMilliseconds = 10_000
+        let staged = GatewayService(
+            configuration: GatewayConfiguration(),
+            pipeline: GatewayPipeline(policy: policy, sessions: store),
+            downstream: StageDownstream(url: URL(string: "http://127.0.0.1:9/v1/decide")!))
+
+        let responder = RecordingResponder()
+        await staged.handle(
+            HTTPRequest(method: "POST", path: "/v1/chat/completions", headers: [:],
+                        body: try! JSONSerialization.data(withJSONObject: chat())),
+            responder)
+
+        let remaining = await store.count()
+        XCTAssertEqual(remaining, 1, "die Klammer bleibt fuer den Rueckweg offen")
+    }
 }
