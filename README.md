@@ -211,6 +211,26 @@ weil der Alleinbetrieb der Normalfall ist; für den Stufenbetrieb liegt eine
 eigene Vorlage bei:
 [`docs/aigatewayd.stage.example.json`](docs/aigatewayd.stage.example.json).
 
+**Der Rückweg der Maskierungs-Klammer.** Im Stufenbetrieb mit aktivierten
+`maskingSessions` bleibt die Zuordnung nach der Weitergabe **geparkt** — die
+nächste Box arbeitet Minuten bis Stunden weiter (Agent Loop, menschliche
+Freigabe) und holt sich die Klardaten am Ende der Kette selbst:
+
+- `POST /v1/session/unmask` `{"correlation_id", "content"}` — ersetzt die
+  Platzhalter durch Klardaten und schließt die Zuordnung; `"keep": true`
+  lässt sie für eine Freigabe-Vorschau stehen. Fehlt die Zuordnung
+  (abgelaufen, fremde Partition), kommt der Text **mit Platzhaltern** zurück
+  und `"restored": false` sagt es — geraten wird nie.
+- `POST /v1/session/extend` — hebt einen Vorgang auf die lange
+  Freigabe-Frist.
+- `POST /v1/session/close` — wirft die Zuordnung sofort weg (abgebrochener
+  Vorgang).
+
+Der Zugriff läuft über denselben Identitäts-Resolver wie der Hinweg und ist
+an die Partition gebunden: eine fremde `correlation_id` zu kennen genügt
+nicht. Im Alleinbetrieb schließt die Klammer weiterhin mit der Antwort —
+den Rückweg gibt es dort nicht, weil niemand später vorbeikommt.
+
 **Mandanten trennen.** Der Abschnitt `identity` (`enabled: true`) schaltet den
 `SharedSecretPrincipalResolver` scharf; das Geheimnis kommt aus
 `AIGATEWAY_IDENTITY_SECRET`, nie aus der Datei. Ohne ihn ist jeder Aufrufer
