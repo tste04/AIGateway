@@ -224,6 +224,20 @@ stopped.wait()
 note("stopping", ["drain_seconds": configuration.drainSeconds,
                   "sources": signalSources.count])
 let drained = service.stop(drainSeconds: configuration.drainSeconds)
+
+// Stopp-Pflege der Datei-Senke. Der Sweep laeuft sonst nur vor einem
+// Schreiben — eine still gewordene Instanz truege abgelaufene Vorfaelle
+// ueber ihr Prozessende hinaus auf der Platte. Semaphor-Bruecke, weil der
+// Daemon oben synchron laeuft und die Senke ein Actor ist.
+if let fileSink = quarantineSink as? FileQuarantineSink {
+    let sinkDone = DispatchSemaphore(value: 0)
+    Task {
+        await fileSink.sweep()
+        sinkDone.signal()
+    }
+    sinkDone.wait()
+}
+
 // Ehrlich melden, statt einen sauberen Stopp zu behaupten: wer nach einem
 // `false` sucht, findet die Laeufe, in denen Anfragen abgeschnitten wurden.
 note("stopped", ["drained": drained])
