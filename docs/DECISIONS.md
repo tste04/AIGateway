@@ -446,18 +446,18 @@ der Umsetzung:
 ### Semantic Cache — was bewusst offen bleibt
 
 Der Cache ist tragfähig für den Betrieb hinter Loopback mit lokalem Embedder,
-aber nicht ausgebaut. Vier Punkte sind bekannt und nicht gebaut:
+aber nicht ausgebaut. Ursprünglich standen hier vier bekannte Lücken; drei
+davon sind inzwischen gebaut und weiter unten begründet (Stand 24.08.2026):
+die Verdrängung ist über `maxEntriesPerPartition` je Partition gedeckelt, die
+Trefferquote zählt `CacheStatistics` payload-frei mit, und Invalidierung gibt
+es je Partition und je Modell. Offen bleibt genau ein Punkt — mit Absicht:
 
-- **Keine Persistenz.** Rein im Speicher; ein Neustart setzt den Kostenhebel
-  auf null. Für die Vertraulichkeit ist das die richtige Wahl (keine maskierten
-  Antworten auf Platte), für den Zweck spürbar.
-- **Verdrängung ist global, nicht je Partition.** Ein lauter Mandant kann die
-  Einträge eines stillen verdrängen — keine Vertraulichkeitsfrage, aber eine
-  Verfügbarkeitskopplung zwischen Mandanten.
-- **Keine Trefferquote.** `CompletionEvent.cacheHit` steht je Anfrage, aber
-  nichts aggregiert sie für die FinOps-Box.
-- **Keine gezielte Invalidierung.** Ändern sich Quelldaten, gibt es keinen Weg,
-  eine Partition oder einen Schlüssel zu verwerfen; nur Ablauf und Verdrängung.
+- **Keine Persistenz-Implementierung.** Rein im Speicher; ein Neustart setzt
+  den Kostenhebel auf null. Für die Vertraulichkeit ist das die richtige Wahl
+  (keine maskierten Antworten auf Platte), für den Zweck spürbar. Die Naht
+  dafür existiert (`snapshot()`/`restore(_:)`); wer sie auf Platte legt,
+  trifft die Daten-in-Ruhe-Entscheidung selbst — Begründung im
+  Umsetzungs-Abschnitt unten.
 
 Dazu eine Grenze der zweiten Stufe: die semantische Suche ist ein linearer Lauf
 über die Einträge der Partition. Bei `maxEntries` in der Größenordnung von
