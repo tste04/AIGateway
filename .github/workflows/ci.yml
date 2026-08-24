@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Woechentlicher Lauf auch ohne Push: Runner-Images, Container-Basis und
+  # Actions driften weiter, waehrend das Repo stillsteht — ein Bruch soll
+  # dann auffallen, nicht erst beim naechsten inhaltlichen Commit.
+  schedule:
+    - cron: "17 6 * * 1"
 
 # Der Workflow liest nur den Checkout — mehr Rechte braucht das Token nicht.
 permissions:
