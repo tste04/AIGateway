@@ -233,6 +233,12 @@ if let fileSink = quarantineSink as? FileQuarantineSink {
     let sinkDone = DispatchSemaphore(value: 0)
     Task {
         await fileSink.sweep()
+        // Verlorene Vorfaelle sind ein Betriebsproblem (volle Platte,
+        // entzogene Rechte) und sollen im Log stehen, nicht nur im Zaehler.
+        let failed = await fileSink.failedWriteCount()
+        if failed > 0 {
+            note("quarantine-write-failures", ["count": failed])
+        }
         sinkDone.signal()
     }
     sinkDone.wait()
