@@ -38,8 +38,12 @@ Output Guardrails sind nicht Teil davon.
 - **Injection-Erkennung** für englische und deutsche Muster, inklusive
   Verschleierung: Homoglyphen (`Ignоre` mit kyrillischem о), Buchstaben-Sperrung
   (`I g n o r e …`), Trennzeichen (`IGNORE-ALL-PREVIOUS`) und Base64-Nutzlasten.
-- **Secret-Erkennung** für gängige Zugangsdaten-Formate (private Schlüssel,
-  AWS-Key-IDs, GitHub- und Slack-Tokens, JWTs).
+- **Secret-Erkennung und -Redaktion** für gängige Zugangsdaten-Formate:
+  private Schlüssel, AWS, GitHub, GitLab, Slack, npm, Google, Stripe
+  (nur live-Schlüssel), Hugging Face, JWTs, generische `sk-…`-API-Schlüssel
+  (deckt OpenAI und Anthropic ab) sowie zitierte Credential- und
+  Passwort-Zuweisungen (de/en). Erkanntes verlässt die Box nur als
+  `[SECRET]` — einweg, ohne Rückübersetzung.
 - **PII-Maskierung mit Round-Trip**: Maskierung auf dem Hinweg, Klardaten auf dem
   Rückweg. Kategorien: Person, Mail, Telefon, IBAN, Adresse, Ort sowie eigene
   Denylist-Begriffe.
