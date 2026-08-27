@@ -75,8 +75,14 @@ Gateway-Guards (Form der Anfrage, nicht Inhalt).
 | SEC-003 | GitHub token |
 | SEC-004 | Slack token |
 | SEC-005 | JWT |
-| SEC-006 | api key (`sk-…`) |
+| SEC-006 | api key (`sk-…`) — deckt OpenAI und Anthropic generisch ab |
 | SEC-007 | credential assignment |
+| SEC-008 | Google API key |
+| SEC-009 | Stripe live key (Test-Schlüssel bewusst nicht — legitim in Doku) |
+| SEC-010 | GitLab personal access token |
+| SEC-011 | npm access token |
+| SEC-012 | Hugging Face token |
+| SEC-013 | password assignment (de/en, nur mit zitiertem Wert) |
 | SAN-001 | unsichtbare/Steuerzeichen entfernt |
 | SAN-002 | Bidi-Override entfernt |
 | SAN-003 | Treffer erst nach Normalisierung (Verschleierung) |
@@ -84,7 +90,7 @@ Gateway-Guards (Form der Anfrage, nicht Inhalt).
 | PII-900 | Token-Dichte-Wächter (mit `abstain` der einzige PII-Block) |
 | DLP-001/002 | Klassifizierungs-Vermerk (de/en) — Default `allow` |
 | DLP-003 | interne URL/Host — Default `redact` |
-| DLP-010…016 | Secret-Redaktion (private key, AWS, GitHub, Slack, JWT, `sk-…`, credential assignment) — dieselben Muster wie SEC-00x, aber `redact` |
+| DLP-010…022 | Secret-Redaktion (private key, AWS, GitHub, Slack, JWT, `sk-…`, credential assignment, Google, Stripe live, GitLab, npm, Hugging Face, password assignment) — dieselben Muster wie SEC-0xx, aber `redact` |
 | MAL-001 | ausführbarer Payload (blockt) |
 | MAL-002 | behaupteter Typ ≠ Inhalt |
 | MAL-003 | ungeprüftes Archiv |
