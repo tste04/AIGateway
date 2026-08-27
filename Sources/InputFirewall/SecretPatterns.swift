@@ -68,6 +68,17 @@ public let defaultSecretPatterns: [SecretPattern] = [
     SecretPattern(injectionID: "SEC-007", dlpID: "DLP-016", label: "credential assignment",
                   pattern: #"(api[_-]?key|client[_-]?secret|access[_-]?token)\s*[:=]\s*['"][A-Za-z0-9_\-/+]{16,}['"]"#,
                   caseSensitive: false, severity: .medium, weight: 0.35),
+    // Google-Schluessel haben feste Laenge (AIza + 35), das Muster darf
+    // deshalb exakt sein — kein {n,} noetig.
+    SecretPattern(injectionID: "SEC-008", dlpID: "DLP-017", label: "Google API key",
+                  pattern: #"\bAIza[0-9A-Za-z_-]{35}\b"#,
+                  caseSensitive: true, severity: .high, weight: 0.40),
+    // Nur live-Schluessel: sk_test/rk_test sind absichtlich wertlos und
+    // tauchen legitim in Doku und Beispielen auf — sie zu redigieren waere
+    // Fehlalarm ohne Schutzwirkung. Ein live-Schluessel dagegen bewegt Geld.
+    SecretPattern(injectionID: "SEC-009", dlpID: "DLP-018", label: "Stripe live key",
+                  pattern: #"\b[sr]k_live_[A-Za-z0-9]{16,}\b"#,
+                  caseSensitive: true, severity: .critical, weight: 0.45),
 ]
 
 /// Die Secret-Regeln fuer die DLP-Stufe: `redact`, einweg. Ersetzt die
