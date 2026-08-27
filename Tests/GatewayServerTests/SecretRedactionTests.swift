@@ -83,6 +83,16 @@ final class SecretRedactionTests: XCTestCase {
         XCTAssertFalse(outcome.decision.findings.contains { $0.ruleID == "SEC-009" })
     }
 
+    func testGitLabTokenIsRedacted() async {
+        await assertRedacted("glpat-FAKEFAKEFAKEFAKEFAKE",
+                             sec: "SEC-010", dlp: "DLP-019")
+    }
+
+    func testNpmTokenIsRedacted() async {
+        await assertRedacted("npm_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+                             sec: "SEC-011", dlp: "DLP-020")
+    }
+
     func testRedactedSecretDoesNotEnterTheCacheKey() async {
         // Der Cache-Schluessel entsteht aus dem forwarded-Text NACH der DLP-Stufe.
         // Ist das Secret dort weg, kann es nicht im Cache-Index landen.
