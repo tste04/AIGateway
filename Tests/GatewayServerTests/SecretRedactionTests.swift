@@ -93,6 +93,27 @@ final class SecretRedactionTests: XCTestCase {
                              sec: "SEC-011", dlp: "DLP-020")
     }
 
+    func testHuggingFaceTokenIsRedacted() async {
+        await assertRedacted("hf_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK",
+                             sec: "SEC-012", dlp: "DLP-021")
+    }
+
+    func testGermanPasswordAssignmentIsRedacted() async {
+        await assertRedacted(#"passwort = "S3hrGeheim99""#,
+                             sec: "SEC-013", dlp: "DLP-022")
+    }
+
+    func testPasswordTalkWithoutValueIsNoFinding() async {
+        // Die Enge der Regel: ohne zitierten Wert kein Fund — normale Rede
+        // ueber Passwoerter ist kein Secret.
+        let outcome = await pipeline().process(
+            ChatRequest(model: "m", messages: [ChatMessage(
+                role: .user, content: "Mein Passwort ist sicher und bleibt geheim.")]),
+            principal: .anonymous)
+        XCTAssertFalse(outcome.decision.findings.contains { $0.ruleID == "SEC-013" })
+        XCTAssertTrue(outcome.forward?.scannableText.contains("Passwort ist sicher") ?? false)
+    }
+
     func testRedactedSecretDoesNotEnterTheCacheKey() async {
         // Der Cache-Schluessel entsteht aus dem forwarded-Text NACH der DLP-Stufe.
         // Ist das Secret dort weg, kann es nicht im Cache-Index landen.
