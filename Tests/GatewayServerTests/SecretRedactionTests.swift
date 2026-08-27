@@ -114,6 +114,17 @@ final class SecretRedactionTests: XCTestCase {
         XCTAssertTrue(outcome.forward?.scannableText.contains("Passwort ist sicher") ?? false)
     }
 
+    func testGenericSkPatternCoversOpenAIAndAnthropicKeys() async {
+        // SEC-006 (sk-...) deckt die Schluessel der grossen Modellanbieter
+        // GENERISCH ab — deshalb gibt es fuer OpenAI und Anthropic keine
+        // eigenen Regeln. Dieser Test nagelt die Abdeckung fest: wer das
+        // sk-Muster enger zieht, verliert sie nicht still.
+        await assertRedacted("sk-FAKEFAKEFAKEFAKEFAKEFAKE",
+                             sec: "SEC-006", dlp: "DLP-015")
+        await assertRedacted("sk-ant-FAKEFAKEFAKEFAKEFAKEFAKE",
+                             sec: "SEC-006", dlp: "DLP-015")
+    }
+
     func testRedactedSecretDoesNotEnterTheCacheKey() async {
         // Der Cache-Schluessel entsteht aus dem forwarded-Text NACH der DLP-Stufe.
         // Ist das Secret dort weg, kann es nicht im Cache-Index landen.
