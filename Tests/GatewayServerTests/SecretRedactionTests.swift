@@ -41,6 +41,48 @@ final class SecretRedactionTests: XCTestCase {
                       "DLP redigiert es")
     }
 
+    /// Ein Format, beide Stufen: das Secret verlaesst die Box nicht, und
+    /// Erkennung (SEC) wie Handlung (DLP) stehen im Audit.
+    private func assertRedacted(_ secret: String, sec: RuleID, dlp: RuleID,
+                                file: StaticString = #filePath,
+                                line: UInt = #line) async {
+        let outcome = await pipeline().process(
+            ChatRequest(model: "m", messages: [ChatMessage(
+                role: .user, content: "Nimm bitte \(secret) dafuer.")]),
+            principal: .anonymous)
+        let forwarded = outcome.forward?.scannableText ?? ""
+        XCTAssertFalse(forwarded.contains(secret),
+                       "\(sec): das Secret darf den Provider nicht erreichen",
+                       file: file, line: line)
+        XCTAssertTrue(forwarded.contains("[SECRET]"), file: file, line: line)
+        XCTAssertTrue(outcome.decision.findings.contains { $0.ruleID == sec },
+                      "\(sec) erkennt", file: file, line: line)
+        XCTAssertTrue(outcome.decision.findings.contains { $0.ruleID == dlp },
+                      "\(dlp) redigiert", file: file, line: line)
+    }
+
+    func testGoogleAPIKeyIsRedacted() async {
+        await assertRedacted("AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK",
+                             sec: "SEC-008", dlp: "DLP-017")
+    }
+
+    func testStripeLiveKeyIsRedacted() async {
+        await assertRedacted("sk_live_FAKEFAKEFAKEFAKEFAKE",
+                             sec: "SEC-009", dlp: "DLP-018")
+    }
+
+    func testStripeTestKeyPassesUntouched() async {
+        // Die Gegenprobe zur live-Entscheidung: Test-Schluessel sind wertlos
+        // und stehen legitim in Doku — kein Fund, keine Redaktion.
+        let outcome = await pipeline().process(
+            ChatRequest(model: "m", messages: [ChatMessage(
+                role: .user, content: "Beispiel: sk_test_FAKEFAKEFAKEFAKEFAKE")]),
+            principal: .anonymous)
+        let forwarded = outcome.forward?.scannableText ?? ""
+        XCTAssertTrue(forwarded.contains("sk_test_FAKEFAKEFAKEFAKEFAKE"))
+        XCTAssertFalse(outcome.decision.findings.contains { $0.ruleID == "SEC-009" })
+    }
+
     func testRedactedSecretDoesNotEnterTheCacheKey() async {
         // Der Cache-Schluessel entsteht aus dem forwarded-Text NACH der DLP-Stufe.
         // Ist das Secret dort weg, kann es nicht im Cache-Index landen.
