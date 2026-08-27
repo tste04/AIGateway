@@ -86,6 +86,17 @@ public let defaultSecretPatterns: [SecretPattern] = [
     SecretPattern(injectionID: "SEC-011", dlpID: "DLP-020", label: "npm access token",
                   pattern: #"\bnpm_[A-Za-z0-9]{36}\b"#,
                   caseSensitive: true, severity: .high, weight: 0.40),
+    // Fuer eine Box VOR Sprachmodellen naheliegend: Hugging-Face-Tokens
+    // tauchen in genau den Prompts auf, die hier durchlaufen.
+    SecretPattern(injectionID: "SEC-012", dlpID: "DLP-021", label: "Hugging Face token",
+                  pattern: #"\bhf_[A-Za-z0-9]{30,}\b"#,
+                  caseSensitive: true, severity: .high, weight: 0.40),
+    // Wie SEC-007, aber fuer Passwoerter, deutsch wie englisch. Der Wert
+    // muss in Anfuehrungszeichen stehen — dieselbe Enge, die SEC-007 vor
+    // Fehlalarmen auf normale Rede bewahrt ("mein Passwort ist sicher").
+    SecretPattern(injectionID: "SEC-013", dlpID: "DLP-022", label: "password assignment",
+                  pattern: #"(password|passwort|passwd|pwd)\s*[:=]\s*['"][^'"\s]{8,}['"]"#,
+                  caseSensitive: false, severity: .medium, weight: 0.35),
 ]
 
 /// Die Secret-Regeln fuer die DLP-Stufe: `redact`, einweg. Ersetzt die
