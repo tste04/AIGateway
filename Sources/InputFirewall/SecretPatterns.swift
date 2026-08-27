@@ -79,6 +79,13 @@ public let defaultSecretPatterns: [SecretPattern] = [
     SecretPattern(injectionID: "SEC-009", dlpID: "DLP-018", label: "Stripe live key",
                   pattern: #"\b[sr]k_live_[A-Za-z0-9]{16,}\b"#,
                   caseSensitive: true, severity: .critical, weight: 0.45),
+    SecretPattern(injectionID: "SEC-010", dlpID: "DLP-019", label: "GitLab personal access token",
+                  pattern: #"\bglpat-[A-Za-z0-9_-]{20,}\b"#,
+                  caseSensitive: true, severity: .high, weight: 0.40),
+    // npm-Tokens haben feste Laenge (npm_ + 36).
+    SecretPattern(injectionID: "SEC-011", dlpID: "DLP-020", label: "npm access token",
+                  pattern: #"\bnpm_[A-Za-z0-9]{36}\b"#,
+                  caseSensitive: true, severity: .high, weight: 0.40),
 ]
 
 /// Die Secret-Regeln fuer die DLP-Stufe: `redact`, einweg. Ersetzt die
