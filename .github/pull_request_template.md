@@ -11,9 +11,3 @@
 - [ ] Scanners detect, the policy decides — no thresholds moved into a scanner.
 - [ ] If a decision in `docs/DECISIONS.md` changed: that file is amended in this
       PR, with reason and date.
-
-## CLA
-
-<!-- Required — PRs without this line can't be merged (see CONTRIBUTING.md): -->
-
-I have read docs/CLA.md and I agree to it for this and all my future contributions.

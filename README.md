@@ -1,16 +1,15 @@
 # AIGateway
 
 [![CI](https://github.com/tste04/AIGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/tste04/AIGateway/actions/workflows/ci.yml)
-[![License: PolyForm NC](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](LICENSE.md)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Swift 5.7+](https://img.shields.io/badge/Swift-5.7+-orange.svg)](Package.swift)
 
 Eine Input Firewall in Swift: die Schicht zwischen Client und Sprachmodell, die
 prüft, was hineingeht. Deterministisch, netzfrei im Kern, ohne externe
 Abhängigkeiten außer `Foundation`.
 
-**Lizenz:** PolyForm Noncommercial 1.0.0 — Quellcode offen, nichtkommerziell
-frei; kommerzielle Nutzung nur mit Lizenz (siehe [Lizenz](#lizenz) /
-[COMMERCIAL.md](COMMERCIAL.md)).
+**Lizenz:** [Apache 2.0](LICENSE) — frei für jede Nutzung, kommerziell wie
+privat.
 
 > **English:** AIGateway is an input firewall for AI systems, written in Swift
 > with `Foundation` as the only dependency: prompt-injection detection
@@ -19,8 +18,8 @@ frei; kommerzielle Nutzung nur mit Lizenz (siehe [Lizenz](#lizenz) /
 > cache, rate limiting and a small daemon — deterministic and network-free at
 > its core. Docs and code comments are in German;
 > [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and the API
-> surface are English. Free for noncommercial use, commercial use requires a
-> license ([COMMERCIAL.md](COMMERCIAL.md)).
+> surface are English. Licensed under Apache 2.0 — free for any use,
+> commercial or private.
 
 ## Einordnung
 
@@ -382,23 +381,15 @@ swift test --filter InputFirewallTests.PIIRoundTripTests/testMaskThenUnmaskResto
 
 ## Lizenz
 
-AIGateway ist **dual-lizenziert** — der Quellcode ist offen einsehbar, die
-Nutzung richtet sich nach dem Zweck:
-
-- **Nichtkommerzielle Nutzung** ist kostenlos unter der
-  [PolyForm Noncommercial License 1.0.0](LICENSE.md).
-- **Kommerzielle Nutzung** (Einsatz im Unternehmen, Einbettung in ein Produkt,
-  Teil eines bezahlten Dienstes) erfordert eine kommerzielle Lizenz — Konditionen
-  auf Verhandlungsbasis, siehe [COMMERCIAL.md](COMMERCIAL.md).
-
-Die komponentenübergreifende Lizenz-Policy (Schichtenmodell, Distribution,
-Chain of Title) steht in [LICENSING.md](LICENSING.md).
-
-Kommerzielle Anfragen: **[hello@tstellmacher.com](mailto:hello@tstellmacher.com)**
+AIGateway steht unter der [Apache License 2.0](LICENSE) — frei nutzbar,
+veränderbar und einbettbar, auch kommerziell. Die Apache-Lizenz statt MIT,
+weil sie eine ausdrückliche Patentklausel mitbringt; für
+Security-Infrastruktur ist das der übliche Standard.
 
 Copyright 2026 Tommy Stellmacher.
 
 ## Beiträge
 
-Beiträge sind willkommen und erfordern das CLA ([docs/CLA.md](docs/CLA.md)) —
-Details in [CONTRIBUTING.md](CONTRIBUTING.md).
+Beiträge sind willkommen — Details in [CONTRIBUTING.md](CONTRIBUTING.md).
+Eingereichter Code steht unter derselben Lizenz wie das Projekt
+(inbound = outbound), ein CLA gibt es nicht.
