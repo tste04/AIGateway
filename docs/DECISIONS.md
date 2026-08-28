@@ -799,18 +799,17 @@ Reihenfolge:
 
 ## Lizenzmodell (August 2026)
 
-Das Projekt ist **dual-lizenziert**: Quellcode offen einsehbar, nichtkommerzielle
-Nutzung frei unter PolyForm Noncommercial 1.0.0, jede kommerzielle Nutzung nur
-mit kommerzieller Lizenz ([COMMERCIAL.md](../COMMERCIAL.md)). Die Begründung und
-das komponentenübergreifende Schichtenmodell stehen in
-[LICENSING.md](../LICENSING.md); die Fähigkeit zur Relizenzierung sichert das
-CLA ([CLA.md](CLA.md)).
+Das Projekt steht unter der **Apache License 2.0** — frei für jede Nutzung,
+kommerziell wie privat. Apache statt MIT wegen der ausdrücklichen
+Patentklausel; für Security-Infrastruktur der übliche Standard. Beiträge
+laufen inbound = outbound (Abschnitt 5 der Lizenz), ein CLA existiert nicht
+mehr. (28.08.2026)
 
-**Historie, festgehalten wegen der Rechtsfolgen:** Vom 02.08. bis 07.08.2026
-stand das Repo unter Apache 2.0. Diese Lizenz ist unwiderruflich — wer den
-Stand aus diesem Fenster bezogen hat, behält die Apache-Rechte für genau diesen
-Schnappschuss. Ab Commit `7fce487` (07.08.2026) gilt für alle weiteren Stände
-wieder das Dual-Modell. Eine erneute Lockerung (NC → permissiv) wäre jederzeit
-möglich und würde nur nach vorn wirken; eine erneute Verschärfung erzeugt
-wieder ein solches dauerhaft freies Fenster — der Wechsel ist also nicht
-beliebig wiederholbar, ohne Substanz zu verschenken. (13.08.2026)
+**Historie, festgehalten wegen der Rechtsfolgen:** Das Repo startete
+dual-lizenziert (PolyForm Noncommercial 1.0.0 + kommerzielle Schiene), stand
+vom 02.08. bis 07.08.2026 unter Apache 2.0, kehrte zum Dual-Modell zurück und
+ist seit dem 28.08.2026 endgültig Apache 2.0. Die Lockerung (NC → permissiv)
+wirkt sauber nach vorn und ist die unkritische Richtung — genau wie es die
+frühere Lizenz-Policy selbst festhielt. Die Gegenrichtung bliebe möglich,
+erzeugte aber erneut ein dauerhaft freies Fenster für den dann aktuellen
+Stand; wer sie erwägt, verschenkt Substanz.
